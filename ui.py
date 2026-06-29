@@ -40,6 +40,10 @@ class FilmFlipWindow(QWidget):
         self.button.setMinimumHeight(45)
         self.button.clicked.connect(self.select_folder)
 
+        self.rename_button = QPushButton("🔄 Rename")
+        self.rename_button.setMinimumHeight(45)
+        self.rename_button.setEnabled(False)
+
         self.info = QLabel(
             "폴더를 선택하거나 폴더를 이 창으로 드래그하세요."
         )
@@ -50,7 +54,11 @@ class FilmFlipWindow(QWidget):
         layout.addWidget(title)
         layout.addWidget(subtitle)
         layout.addSpacing(10)
-        layout.addWidget(self.button)
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.button)
+        buttons.addWidget(self.rename_button)
+
+        layout.addLayout(buttons)
         layout.addWidget(self.info)
         layout.addWidget(self.table)
 
@@ -61,6 +69,8 @@ class FilmFlipWindow(QWidget):
         self.images = find_images(folder)
 
         self.refresh_preview()
+
+        self.rename_button.setEnabled(len(self.images) > 0)
 
         if len(self.images) == 0:
             QMessageBox.information(
