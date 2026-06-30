@@ -1,7 +1,8 @@
+from settings import get_data_file
 import json
 from pathlib import Path
 
-PRESET_FILE = Path(__file__).with_name("shooting_presets.json")
+PRESET_FILE = get_data_file("shooting_presets.json")
 
 
 def load_shooting_presets():

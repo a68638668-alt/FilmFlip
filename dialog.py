@@ -1,3 +1,4 @@
+from settings import get_data_file
 import json
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from shooting_presets import load_shooting_presets, save_shooting_presets
 
-PRESET_FILE = Path(__file__).with_name("filmflip_presets.json")
+PRESET_FILE = get_data_file("filmflip_presets.json")
 
 PRESET_KEYS = {
     "camera": "카메라",
