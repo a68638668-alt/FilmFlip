@@ -5,8 +5,46 @@
       "filename": "FM2"
     }
   ],
-  "film": [],
-  "lab": [],
+  "film": [
+    {
+      "display": "Reflx 800T",
+      "filename": "Reflx 800T"
+    },
+    {
+      "display": "Colorplus200",
+      "filename": "Colorplus200"
+    },
+    {
+      "display": "Ultramax400",
+      "filename": "Ultramax400"
+    },
+    {
+      "display": "Vision3 250D",
+      "filename": "Vision3 250D"
+    },
+    {
+      "display": "Vision3 500T",
+      "filename": "Vision3 500T"
+    },
+    {
+      "display": "Reflx 400D",
+      "filename": "Reflx 400D"
+    }
+  ],
+  "lab": [
+    {
+      "display": "다크룸",
+      "filename": "다크룸"
+    },
+    {
+      "display": "망우삼림",
+      "filename": "망우삼림"
+    },
+    {
+      "display": "고래현상소",
+      "filename": "고래현상소"
+    }
+  ],
   "place": [],
   "template": {
     "order": [
@@ -17,9 +55,9 @@
       "number"
     ],
     "enabled": {
-      "camera": false,
-      "film": false,
-      "lab": false,
+      "camera": true,
+      "film": true,
+      "lab": true,
       "place": false,
       "number": true
     }

@@ -19,8 +19,11 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QAbstractItemView,
+    QInputDialog,
 )
 
+
+from shooting_presets import load_shooting_presets, save_shooting_presets
 
 PRESET_FILE = Path(__file__).with_name("filmflip_presets.json")
 
@@ -371,6 +374,7 @@ class RenameDialog(QDialog):
         self.setMinimumWidth(560)
 
         self.presets = load_presets()
+        self.shooting_presets = load_shooting_presets()
         self.template_settings = load_template_settings()
 
         layout = QVBoxLayout(self)
@@ -380,6 +384,33 @@ class RenameDialog(QDialog):
             "번호는 자동으로 001부터 붙습니다."
         )
         layout.addWidget(description)
+
+        preset_group = QGroupBox("촬영 프리셋")
+        preset_layout = QHBoxLayout(preset_group)
+
+        self.shooting_combo = QComboBox()
+        self.shooting_combo.addItem("없음", None)
+        self._reload_shooting_presets()
+
+        self.add_shooting_button = QPushButton("＋")
+        self.edit_shooting_button = QPushButton("✏")
+        self.delete_shooting_button = QPushButton("🗑")
+
+        self.add_shooting_button.setFixedWidth(42)
+        self.edit_shooting_button.setFixedWidth(42)
+        self.delete_shooting_button.setFixedWidth(42)
+
+        self.shooting_combo.currentIndexChanged.connect(self.apply_shooting_preset)
+        self.add_shooting_button.clicked.connect(self.add_shooting_preset)
+        self.edit_shooting_button.clicked.connect(self.edit_shooting_preset)
+        self.delete_shooting_button.clicked.connect(self.delete_shooting_preset)
+
+        preset_layout.addWidget(self.shooting_combo)
+        preset_layout.addWidget(self.add_shooting_button)
+        preset_layout.addWidget(self.edit_shooting_button)
+        preset_layout.addWidget(self.delete_shooting_button)
+
+        layout.addWidget(preset_group)
 
         grid = QGridLayout()
 
@@ -447,6 +478,225 @@ class RenameDialog(QDialog):
         layout.addWidget(buttons)
 
         self.update_preview()
+
+    def _reload_shooting_presets(self, keep_name=""):
+        self.shooting_combo.blockSignals(True)
+        self.shooting_combo.clear()
+        self.shooting_combo.addItem("없음", None)
+
+        selected_index = 0
+
+        for preset in self.shooting_presets:
+            self.shooting_combo.addItem(preset.get("name", ""), dict(preset))
+
+            if keep_name and preset.get("name", "") == keep_name:
+                selected_index = self.shooting_combo.count() - 1
+
+        self.shooting_combo.setCurrentIndex(selected_index)
+        self.shooting_combo.blockSignals(False)
+
+    def _set_combo_text(self, combo, value):
+        combo.setCurrentText(value or "")
+
+    def set_template_enabled(self, key, enabled):
+        for row in range(self.template_list.count()):
+            item = self.template_list.item(row)
+
+            if item.data(Qt.UserRole) == key:
+                item.setCheckState(Qt.Checked if enabled else Qt.Unchecked)
+                return
+
+    def apply_shooting_preset(self):
+        preset = self.shooting_combo.currentData()
+
+        if not preset:
+            return
+
+        self._set_combo_text(self.camera_combo, preset.get("camera", ""))
+        self._set_combo_text(self.film_combo, preset.get("film", ""))
+        self._set_combo_text(self.lab_combo, preset.get("lab", ""))
+
+        # 프리셋에 값이 있는 항목은 파일명 구성에서 자동 체크
+        self.set_template_enabled("camera", bool(preset.get("camera")))
+        self.set_template_enabled("film", bool(preset.get("film")))
+        self.set_template_enabled("lab", bool(preset.get("lab")))
+        self.set_template_enabled("number", True)
+
+        # 장소는 촬영마다 달라지는 값이라 프리셋에서 건드리지 않는다.
+        self.update_preview()
+
+    def _current_shooting_values(self):
+        return {
+            "camera": self._combo_filename(self.camera_combo),
+            "film": self._combo_filename(self.film_combo),
+            "lab": self._combo_filename(self.lab_combo),
+        }
+
+    def _default_shooting_name(self):
+        values = self._current_shooting_values()
+        parts = [
+            values["camera"],
+            values["film"],
+            values["lab"],
+        ]
+        parts = [part for part in parts if part]
+        return " + ".join(parts) if parts else "새 촬영 프리셋"
+
+    def add_shooting_preset(self):
+        values = self._current_shooting_values()
+
+        if not any(values.values()):
+            QMessageBox.information(
+                self,
+                "FilmFlip",
+                "카메라, 필름, 현상소 중 하나 이상을 먼저 선택해주세요.",
+            )
+            return
+
+        name, ok = QInputDialog.getText(
+            self,
+            "촬영 프리셋 추가",
+            "프리셋 이름",
+            text=self._default_shooting_name(),
+        )
+
+        if not ok:
+            return
+
+        name = _safe_component(name)
+
+        if not name:
+            return
+
+        duplicate_index = next(
+            (
+                i for i, preset in enumerate(self.shooting_presets)
+                if preset.get("name", "") == name
+            ),
+            None,
+        )
+
+        if duplicate_index is not None:
+            reply = QMessageBox.question(
+                self,
+                "FilmFlip",
+                f"'{name}' 프리셋이 이미 있습니다.\n덮어쓸까요?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+
+            if reply != QMessageBox.Yes:
+                return
+
+            self.shooting_presets[duplicate_index] = {
+                "name": name,
+                "camera": values["camera"],
+                "film": values["film"],
+                "lab": values["lab"],
+            }
+            save_shooting_presets(self.shooting_presets)
+            self._reload_shooting_presets(name)
+            self.apply_shooting_preset()
+            self.update_preview()
+            return
+
+        preset = {
+            "name": name,
+            "camera": values["camera"],
+            "film": values["film"],
+            "lab": values["lab"],
+        }
+
+        self.shooting_presets.append(preset)
+        save_shooting_presets(self.shooting_presets)
+        self._reload_shooting_presets(name)
+        self.apply_shooting_preset()
+        self.update_preview()
+
+    def edit_shooting_preset(self):
+        index = self.shooting_combo.currentIndex()
+
+        if index <= 0:
+            return
+
+        preset = self.shooting_combo.currentData()
+
+        if not preset:
+            return
+
+        name, ok = QInputDialog.getText(
+            self,
+            "촬영 프리셋 수정",
+            "프리셋 이름",
+            text=preset.get("name", ""),
+        )
+
+        if not ok:
+            return
+
+        name = _safe_component(name)
+
+        if not name:
+            return
+
+        duplicate_index = next(
+            (
+                i for i, preset in enumerate(self.shooting_presets)
+                if i != index - 1 and preset.get("name", "") == name
+            ),
+            None,
+        )
+
+        if duplicate_index is not None:
+            QMessageBox.warning(
+                self,
+                "FilmFlip",
+                f"'{name}' 프리셋이 이미 있습니다.",
+            )
+            return
+
+        values = self._current_shooting_values()
+
+        new_preset = {
+            "name": name,
+            "camera": values["camera"],
+            "film": values["film"],
+            "lab": values["lab"],
+        }
+
+        self.shooting_presets[index - 1] = new_preset
+        save_shooting_presets(self.shooting_presets)
+        self._reload_shooting_presets(name)
+        self.apply_shooting_preset()
+        self.update_preview()
+
+    def delete_shooting_preset(self):
+        index = self.shooting_combo.currentIndex()
+
+        if index <= 0:
+            return
+
+        preset = self.shooting_combo.currentData()
+
+        if not preset:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "FilmFlip",
+            f"'{preset.get('name', '')}' 프리셋을 삭제할까요?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        del self.shooting_presets[index - 1]
+        save_shooting_presets(self.shooting_presets)
+        self._reload_shooting_presets()
+        self.update_preview()
+
 
     def _create_combo(self, key):
         combo = QComboBox()

@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
 from dragdrop import ImageTable
 import engine
 from engine import find_images, build_preview, rename_images, undo_rename
+from settings import load_settings, save_settings
+
 from dialog import (
     RenameDialog,
     rename_finished,
@@ -134,6 +136,8 @@ class FilmFlipWindow(QWidget):
 
     def __init__(self):
         super().__init__()
+
+        self.settings = load_settings()
 
         self.setWindowTitle("🎞 FilmFlip v0.7")
         self.resize(900, 650)
@@ -378,6 +382,9 @@ class FilmFlipWindow(QWidget):
 
         if not folder:
             return
+
+        self.settings["last_folder"] = folder
+        save_settings(self.settings)
 
         self.load_folder(folder)
         self.undo_button.setEnabled(False)
