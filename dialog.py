@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QMessageBox,
     QDialog,
@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QLineEdit,
     QGridLayout,
+    QGroupBox,
+    QAbstractItemView,
 )
 
 
@@ -29,12 +31,30 @@ PRESET_KEYS = {
     "place": "장소",
 }
 
+TEMPLATE_LABELS = {
+    "camera": "카메라",
+    "film": "필름",
+    "lab": "현상소",
+    "place": "장소",
+    "number": "번호",
+}
 
 DEFAULT_PRESETS = {
     "camera": [],
     "film": [],
     "lab": [],
     "place": [],
+}
+
+DEFAULT_TEMPLATE = {
+    "order": ["camera", "film", "lab", "place", "number"],
+    "enabled": {
+        "camera": True,
+        "film": True,
+        "lab": True,
+        "place": True,
+        "number": True,
+    },
 }
 
 
@@ -76,15 +96,26 @@ def _normalize_entry(entry):
     }
 
 
-def load_presets():
+def _read_json():
     if not PRESET_FILE.exists():
-        return {key: [] for key in DEFAULT_PRESETS}
+        return {}
 
     try:
         data = json.loads(PRESET_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
     except Exception:
-        return {key: [] for key in DEFAULT_PRESETS}
+        return {}
 
+
+def _write_json(data):
+    PRESET_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def load_presets():
+    data = _read_json()
     presets = {}
 
     for key in DEFAULT_PRESETS:
@@ -101,7 +132,7 @@ def load_presets():
 
 
 def save_presets(presets):
-    cleaned = {}
+    data = _read_json()
 
     for key in DEFAULT_PRESETS:
         items = []
@@ -111,12 +142,46 @@ def save_presets(presets):
             if entry and entry not in items:
                 items.append(entry)
 
-        cleaned[key] = items
+        data[key] = items
 
-    PRESET_FILE.write_text(
-        json.dumps(cleaned, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _write_json(data)
+
+
+def load_template_settings():
+    data = _read_json()
+    raw = data.get("template", {})
+
+    order = raw.get("order", DEFAULT_TEMPLATE["order"])
+    enabled = raw.get("enabled", DEFAULT_TEMPLATE["enabled"])
+
+    valid_keys = list(TEMPLATE_LABELS.keys())
+
+    cleaned_order = []
+    for key in order:
+        if key in valid_keys and key not in cleaned_order:
+            cleaned_order.append(key)
+
+    for key in valid_keys:
+        if key not in cleaned_order:
+            cleaned_order.append(key)
+
+    cleaned_enabled = {}
+    for key in valid_keys:
+        cleaned_enabled[key] = bool(enabled.get(key, DEFAULT_TEMPLATE["enabled"][key]))
+
+    # 번호가 빠지면 파일명이 중복되기 쉬워서 항상 켜둔다.
+    cleaned_enabled["number"] = True
+
+    return {
+        "order": cleaned_order,
+        "enabled": cleaned_enabled,
+    }
+
+
+def save_template_settings(settings):
+    data = _read_json()
+    data["template"] = settings
+    _write_json(data)
 
 
 class PresetEditDialog(QDialog):
@@ -281,14 +346,32 @@ class PresetManageDialog(QDialog):
         return [dict(item) for item in self.items]
 
 
+class TemplateListWidget(QListWidget):
+    orderChanged = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.setDragDropMode(QAbstractItemView.InternalMove)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setDragDropOverwriteMode(False)
+        self.setAlternatingRowColors(True)
+
+    def dropEvent(self, event):
+        super().dropEvent(event)
+        self.orderChanged.emit()
+
+
 class RenameDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
 
         self.setWindowTitle("이름 변경")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
 
         self.presets = load_presets()
+        self.template_settings = load_template_settings()
 
         layout = QVBoxLayout(self)
 
@@ -311,6 +394,23 @@ class RenameDialog(QDialog):
         self._add_preset_row(grid, 3, "place", self.place_combo)
 
         layout.addLayout(grid)
+
+        order_group = QGroupBox("파일명 구성")
+        order_layout = QVBoxLayout(order_group)
+
+        guide = QLabel("체크로 사용 여부를 정하고, 드래그로 순서를 바꿀 수 있습니다.")
+        order_layout.addWidget(guide)
+
+        self.template_list = TemplateListWidget()
+        self.template_list.setMaximumHeight(170)
+        order_layout.addWidget(self.template_list)
+
+        reset_button = QPushButton("기본값 복원")
+        reset_button.clicked.connect(self.reset_template)
+        order_layout.addWidget(reset_button)
+
+        layout.addWidget(order_group)
+        self._load_template_list()
 
         self.normal_radio = QRadioButton("현재 순서 유지 (기본)")
         self.normal_radio.setChecked(True)
@@ -335,6 +435,8 @@ class RenameDialog(QDialog):
             combo.lineEdit().textChanged.connect(self.update_preview)
 
         self.reverse_radio.toggled.connect(self.update_preview)
+        self.template_list.itemChanged.connect(self.update_preview)
+        self.template_list.orderChanged.connect(self.update_preview)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
@@ -400,6 +502,60 @@ class RenameDialog(QDialog):
 
         self.update_preview()
 
+    def _load_template_list(self):
+        self.template_list.blockSignals(True)
+        self.template_list.clear()
+
+        enabled = self.template_settings["enabled"]
+
+        for key in self.template_settings["order"]:
+            item = QListWidgetItem(f"☰ {TEMPLATE_LABELS[key]}")
+            item.setData(Qt.UserRole, key)
+            item.setFlags(
+                item.flags()
+                | Qt.ItemIsUserCheckable
+                | Qt.ItemIsDragEnabled
+                | Qt.ItemIsDropEnabled
+            )
+            item.setCheckState(Qt.Checked if enabled.get(key, True) else Qt.Unchecked)
+
+            if key == "number":
+                # 번호를 끄면 파일명이 중복될 수 있어 항상 켜둔다.
+                item.setCheckState(Qt.Checked)
+
+            self.template_list.addItem(item)
+
+        self.template_list.blockSignals(False)
+
+    def reset_template(self):
+        self.template_settings = {
+            "order": list(DEFAULT_TEMPLATE["order"]),
+            "enabled": dict(DEFAULT_TEMPLATE["enabled"]),
+        }
+        self._load_template_list()
+        self.update_preview()
+
+    def _current_template_settings(self):
+        order = []
+        enabled = {}
+
+        for row in range(self.template_list.count()):
+            item = self.template_list.item(row)
+            key = item.data(Qt.UserRole)
+
+            if key not in TEMPLATE_LABELS:
+                continue
+
+            order.append(key)
+            enabled[key] = item.checkState() == Qt.Checked
+
+        enabled["number"] = True
+
+        return {
+            "order": order,
+            "enabled": enabled,
+        }
+
     def _combo_filename(self, combo):
         text = _safe_component(combo.currentText())
 
@@ -415,17 +571,31 @@ class RenameDialog(QDialog):
 
         return text
 
-    def _components(self):
-        return [
-            self._combo_filename(self.camera_combo),
-            self._combo_filename(self.film_combo),
-            self._combo_filename(self.lab_combo),
-            self._combo_filename(self.place_combo),
-        ]
+    def _components_map(self):
+        return {
+            "camera": self._combo_filename(self.camera_combo),
+            "film": self._combo_filename(self.film_combo),
+            "lab": self._combo_filename(self.lab_combo),
+            "place": self._combo_filename(self.place_combo),
+            "number": "{n}",
+        }
 
     def _template(self):
-        parts = [part for part in self._components() if part]
-        parts.append("{n}")
+        settings = self._current_template_settings()
+        components = self._components_map()
+        parts = []
+
+        for key in settings["order"]:
+            if not settings["enabled"].get(key, True):
+                continue
+
+            value = components.get(key, "")
+            if value:
+                parts.append(value)
+
+        if "{n}" not in parts:
+            parts.append("{n}")
+
         return "_".join(parts)
 
     def update_preview(self):
@@ -440,16 +610,21 @@ class RenameDialog(QDialog):
         )
 
     def values(self):
-        camera, film, lab, place = self._components()
+        components = self._components_map()
+        settings = self._current_template_settings()
+
+        save_template_settings(settings)
 
         return {
-            "camera": camera,
-            "film": film,
-            "lab": lab,
-            "place": place,
+            "camera": components["camera"],
+            "film": components["film"],
+            "lab": components["lab"],
+            "place": components["place"],
             "template": self._template(),
             "reverse": self.reverse_radio.isChecked(),
+            "template_settings": settings,
         }
+
 
 
 def confirm_rename(parent, count):

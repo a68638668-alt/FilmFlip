@@ -7,5 +7,21 @@
   ],
   "film": [],
   "lab": [],
-  "place": []
+  "place": [],
+  "template": {
+    "order": [
+      "camera",
+      "film",
+      "lab",
+      "place",
+      "number"
+    ],
+    "enabled": {
+      "camera": false,
+      "film": false,
+      "lab": false,
+      "place": false,
+      "number": true
+    }
+  }
 }
