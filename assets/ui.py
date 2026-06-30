@@ -146,7 +146,7 @@ class FilmFlipWindow(QWidget):
 
         self.settings = load_settings()
 
-        self.setWindowTitle("🎞 FilmFlip v1.1")
+        self.setWindowTitle("🎞 FilmFlip v1.0")
         self.resize(900, 650)
         self.setAcceptDrops(True)
 
@@ -193,7 +193,6 @@ class FilmFlipWindow(QWidget):
         self.table.setIconSize(QSize(140, 105))
         self.table.orderChanged.connect(self.sync_order)
         self.table.cellDoubleClicked.connect(self.open_preview_from_row)
-        self.table.rowDoubleClicked.connect(self.open_preview_from_row_only)
         self.table.rowDoubleClicked.connect(self.open_preview_from_row_only)
 
         buttons = QHBoxLayout()
@@ -319,13 +318,8 @@ class FilmFlipWindow(QWidget):
             # 드래그 직후에는 테이블을 다시 그리지 않아 반응속도를 유지한다.
             for row in range(self.table.rowCount()):
                 self.table.setRowHeight(row,122)
-            for row in range(self.table.rowCount()):
-                self.table.setRowHeight(row,122)
 
     def open_preview_from_row_only(self, row):
-        self.open_preview_from_row(row,0)
-
-    def open_preview_from_row_only(self,row):
         self.open_preview_from_row(row,0)
 
     def open_preview_from_row(self, row, _column):
