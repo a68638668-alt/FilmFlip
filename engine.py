@@ -27,11 +27,57 @@ def find_images(folder):
     return images
 
 
-def build_preview(images, template="{n}", reverse=True):
+def _safe_component(text):
+    text = (text or "").strip()
+
+    for char in ['/', '\\', ':', '*', '?', '"', '<', '>', '|']:
+        text = text.replace(char, "")
+
+    return text.strip()
+
+
+def _make_template(
+    template=None,
+    camera="",
+    film="",
+    lab="",
+    place="",
+):
+    if template:
+        return template
+
+    parts = [
+        _safe_component(camera),
+        _safe_component(film),
+        _safe_component(lab),
+        _safe_component(place),
+    ]
+    parts = [part for part in parts if part]
+    parts.append("{n}")
+
+    return "_".join(parts)
+
+
+def build_preview(
+    images,
+    template="{n}",
+    reverse=True,
+    camera="",
+    film="",
+    lab="",
+    place="",
+):
     preview = []
 
     total = len(images)
-    digits = max(3, len(str(total)))
+    digits = 3
+    template = _make_template(
+        template=template,
+        camera=camera,
+        film=film,
+        lab=lab,
+        place=place,
+    )
 
     for index, image in enumerate(images):
         if reverse:
@@ -55,6 +101,7 @@ def build_preview(images, template="{n}", reverse=True):
 
 
 LAST_UNDO = []
+
 
 def rename_images(preview):
     """
@@ -124,7 +171,7 @@ def undo_rename(folder, undo_list):
     for current_name, old_name in undo_list:
 
         current_path = folder / current_name
-    
+
         if not current_path.exists():
             continue
 
