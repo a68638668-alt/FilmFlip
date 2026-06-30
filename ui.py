@@ -1,3 +1,4 @@
+from pathlib import Path
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QPixmap, QIcon
 from PySide6.QtWidgets import (
@@ -35,6 +36,11 @@ class ImagePreviewDialog(QDialog):
         self.pixmap_cache = {}
 
         self.setWindowTitle("FilmFlip Preview")
+        BASE_DIR = Path(__file__).resolve().parent
+        if sys.platform == "darwin":
+            self.setWindowIcon(QIcon(str(BASE_DIR / "assets" / "icon.icns")))
+        else:
+            self.setWindowIcon(QIcon(str(BASE_DIR / "assets" / "icon.ico")))
         self.resize(1000, 750)
 
         layout = QVBoxLayout()
@@ -139,7 +145,7 @@ class FilmFlipWindow(QWidget):
 
         self.settings = load_settings()
 
-        self.setWindowTitle("🎞 FilmFlip v0.9")
+        self.setWindowTitle("🎞 FilmFlip v1.0")
         self.resize(900, 650)
         self.setAcceptDrops(True)
 
