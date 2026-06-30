@@ -54,12 +54,17 @@ def build_preview(images, template="{n}", reverse=True):
     return preview
 
 
+LAST_UNDO = []
+
 def rename_images(preview):
     """
     충돌 없이 파일명을 변경한다.
     1차 : 임시 파일명으로 변경
     2차 : 최종 파일명으로 변경
     """
+
+    global LAST_UNDO
+    LAST_UNDO = build_undo_list(preview)
 
     temp_files = []
 
@@ -119,7 +124,7 @@ def undo_rename(folder, undo_list):
     for current_name, old_name in undo_list:
 
         current_path = folder / current_name
-
+    
         if not current_path.exists():
             continue
 
