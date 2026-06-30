@@ -8,11 +8,16 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QTableWidgetItem,
     QHBoxLayout,
+    QDialog,
 )
 
 from dragdrop import ImageTable
 from engine import find_images, build_preview, rename_images
-from dialog import confirm_rename, rename_finished, rename_failed
+from dialog import (
+    RenameDialog,
+    rename_finished,
+    rename_failed,
+)
 
 
 class FilmFlipWindow(QWidget):
@@ -41,10 +46,19 @@ class FilmFlipWindow(QWidget):
         self.button.setMinimumHeight(45)
         self.button.clicked.connect(self.select_folder)
 
-        self.rename_button = QPushButton("🔄 Rename")
+        self.reverse_button = QPushButton("🔄 역순 변경")
+        self.reverse_button.setMinimumHeight(45)
+        self.reverse_button.setEnabled(False)
+        self.reverse_button.clicked.connect(self.reverse_rename)
+
+        self.rename_button = QPushButton("✏️ 이름 변경")
         self.rename_button.setMinimumHeight(45)
         self.rename_button.setEnabled(False)
         self.rename_button.clicked.connect(self.rename_files)
+
+        self.undo_button = QPushButton("↩ Undo")
+        self.undo_button.setMinimumHeight(45)
+        self.undo_button.setEnabled(False)
 
         self.info = QLabel(
             "폴더를 선택하거나 폴더를 이 창으로 드래그하세요."
@@ -58,7 +72,9 @@ class FilmFlipWindow(QWidget):
         layout.addSpacing(10)
         buttons = QHBoxLayout()
         buttons.addWidget(self.button)
+        buttons.addWidget(self.reverse_button)
         buttons.addWidget(self.rename_button)
+        buttons.addWidget(self.undo_button)
 
         layout.addLayout(buttons)
         layout.addWidget(self.info)
@@ -72,7 +88,9 @@ class FilmFlipWindow(QWidget):
 
         self.refresh_preview()
 
-        self.rename_button.setEnabled(len(self.images) > 0)
+        enabled = len(self.images) > 0
+        self.reverse_button.setEnabled(enabled)
+        self.rename_button.setEnabled(enabled)
 
         if len(self.images) == 0:
             QMessageBox.information(
@@ -107,20 +125,45 @@ class FilmFlipWindow(QWidget):
 
 
 
-    def rename_files(self):
+
+    def reverse_rename(self):
 
         preview = build_preview(self.images)
 
         if not preview:
             return
 
-        if not confirm_rename(self, len(preview)):
+        try:
+            rename_images(preview)
+            rename_finished(self, len(preview))
+            self.load_folder(preview[0][0].parent)
+
+        except Exception as error:
+            rename_failed(self, str(error))
+
+    def rename_files(self):
+
+        dialog = RenameDialog(self)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        options = dialog.values()
+
+        preview = build_preview(
+            self.images,
+            template=options["template"],
+            reverse=options["reverse"],
+        )
+
+        if not preview:
             return
 
         try:
             rename_images(preview)
             rename_finished(self, len(preview))
             self.load_folder(preview[0][0].parent)
+
         except Exception as error:
             rename_failed(self, str(error))
 

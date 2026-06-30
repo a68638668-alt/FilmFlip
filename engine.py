@@ -27,15 +27,21 @@ def find_images(folder):
     return images
 
 
-def build_preview(images):
+def build_preview(images, template="{n}", reverse=True):
     preview = []
 
     total = len(images)
     digits = max(3, len(str(total)))
 
     for index, image in enumerate(images):
-        new_number = total - index
-        new_name = f"{new_number:0{digits}d}{image.suffix.lower()}"
+        if reverse:
+            new_number = total - index
+        else:
+            new_number = index + 1
+
+        number = f"{new_number:0{digits}d}"
+        base_name = template.replace("{n}", number)
+        new_name = f"{base_name}{image.suffix.lower()}"
 
         preview.append(
             (
