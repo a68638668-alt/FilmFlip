@@ -12,7 +12,8 @@ from PySide6.QtWidgets import (
 )
 
 from dragdrop import ImageTable
-from engine import find_images, build_preview, rename_images
+import engine
+from engine import find_images, build_preview, rename_images, undo_rename
 from dialog import (
     RenameDialog,
     rename_finished,
@@ -59,6 +60,7 @@ class FilmFlipWindow(QWidget):
         self.undo_button = QPushButton("↩ Undo")
         self.undo_button.setMinimumHeight(45)
         self.undo_button.setEnabled(False)
+        self.undo_button.clicked.connect(self.undo_last)
 
         self.info = QLabel(
             "폴더를 선택하거나 폴더를 이 창으로 드래그하세요."
@@ -136,6 +138,7 @@ class FilmFlipWindow(QWidget):
         try:
             rename_images(preview)
             rename_finished(self, len(preview))
+            self.undo_button.setEnabled(True)
             self.load_folder(preview[0][0].parent)
 
         except Exception as error:
@@ -162,7 +165,23 @@ class FilmFlipWindow(QWidget):
         try:
             rename_images(preview)
             rename_finished(self, len(preview))
+            self.undo_button.setEnabled(True)
             self.load_folder(preview[0][0].parent)
+
+        except Exception as error:
+            rename_failed(self, str(error))
+
+
+
+    def undo_last(self):
+
+        if not self.images or not engine.LAST_UNDO:
+            return
+
+        try:
+            undo_rename(self.images[0].parent, engine.LAST_UNDO)
+            self.undo_button.setEnabled(False)
+            self.load_folder(self.images[0].parent)
 
         except Exception as error:
             rename_failed(self, str(error))
