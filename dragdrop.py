@@ -21,18 +21,23 @@ class ImageTable(QTableWidget):
         self._drag_start_position = None
         self._drag_source_row = -1
 
-        self.setColumnCount(2)
+        self.setColumnCount(3)
         self.setHorizontalHeaderLabels(
             [
+                "썸네일",
                 "현재 파일명",
                 "변경될 파일명",
             ]
         )
 
-        self.horizontalHeader().setSectionResizeMode(
-            QHeaderView.Stretch
-        )
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        self.setColumnWidth(0, 90)
+
         self.verticalHeader().setVisible(False)
+        self.verticalHeader().setDefaultSectionSize(84)
 
         self.setEditTriggers(
             QAbstractItemView.NoEditTriggers
@@ -44,8 +49,8 @@ class ImageTable(QTableWidget):
             QAbstractItemView.SingleSelection
         )
 
-        # Qt 기본 InternalMove는 셀 위에 드롭할 때 item이 비는 경우가 있어
-        # 기본 행 이동은 쓰지 않고, 아래 이벤트에서 행 이동을 직접 처리한다.
+        # Qt 기본 InternalMove는 셀 위 드롭 시 아이템이 비는 경우가 있어
+        # 기본 이동은 쓰지 않고, 아래 이벤트에서 행 이동을 직접 처리한다.
         self.setDragEnabled(False)
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
@@ -55,6 +60,16 @@ class ImageTable(QTableWidget):
         self.setDefaultDropAction(Qt.MoveAction)
 
         self.setAlternatingRowColors(True)
+        self.setStyleSheet(
+            """
+            QTableWidget::item:selected {
+                background-color: #3f5f8f;
+            }
+            QTableWidget::item:hover {
+                background-color: #333333;
+            }
+            """
+        )
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -167,6 +182,7 @@ class ImageTable(QTableWidget):
             return
 
         row_items = []
+
         for column in range(self.columnCount()):
             row_items.append(self.takeItem(source_row, column))
 
@@ -177,6 +193,7 @@ class ImageTable(QTableWidget):
 
         insert_row = max(0, min(insert_row, self.rowCount()))
         self.insertRow(insert_row)
+        self.setRowHeight(insert_row, 84)
 
         for column, item in enumerate(row_items):
             if item is not None:

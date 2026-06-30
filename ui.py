@@ -1,4 +1,5 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QPixmap, QIcon
 from PySide6.QtWidgets import (
     QWidget,
     QLabel,
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QHBoxLayout,
     QDialog,
+    QSizePolicy,
 )
 
 from dragdrop import ImageTable
@@ -21,16 +23,124 @@ from dialog import (
 )
 
 
+class ImagePreviewDialog(QDialog):
+
+    def __init__(self, images, index=0, parent=None):
+        super().__init__(parent)
+
+        self.images = images
+        self.index = max(0, min(index, len(images) - 1))
+        self.pixmap_cache = {}
+
+        self.setWindowTitle("FilmFlip Preview")
+        self.resize(1000, 750)
+
+        layout = QVBoxLayout()
+
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setMinimumSize(600, 450)
+        self.image_label.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+
+        self.name_label = QLabel()
+        self.name_label.setAlignment(Qt.AlignCenter)
+
+        self.help_label = QLabel(
+            "←/→ 이전·다음   |   ESC 닫기"
+        )
+        self.help_label.setAlignment(Qt.AlignCenter)
+        self.help_label.setStyleSheet("color: #888;")
+
+        layout.addWidget(self.image_label, stretch=1)
+        layout.addWidget(self.name_label)
+        layout.addWidget(self.help_label)
+
+        self.setLayout(layout)
+        self.update_image()
+
+    def current_image(self):
+        if not self.images:
+            return None
+
+        return self.images[self.index]
+
+    def original_pixmap(self, image):
+        cache_key = str(image)
+        pixmap = self.pixmap_cache.get(cache_key)
+
+        if pixmap is None:
+            pixmap = QPixmap(cache_key)
+            self.pixmap_cache[cache_key] = pixmap
+
+        return pixmap
+
+    def update_image(self):
+        image = self.current_image()
+
+        if image is None:
+            return
+
+        pixmap = self.original_pixmap(image)
+
+        if pixmap.isNull():
+            self.image_label.setText("이미지를 불러올 수 없습니다.")
+            self.name_label.setText(image.name)
+            return
+
+        target_size = self.image_label.size()
+
+        if target_size.width() <= 0 or target_size.height() <= 0:
+            target_size = QSize(900, 650)
+
+        scaled = pixmap.scaled(
+            target_size,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+
+        self.image_label.setPixmap(scaled)
+        self.name_label.setText(
+            f"{self.index + 1} / {len(self.images)}   {image.name}"
+        )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_image()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.close()
+            return
+
+        if event.key() == Qt.Key_Right:
+            if self.images:
+                self.index = (self.index + 1) % len(self.images)
+                self.update_image()
+            return
+
+        if event.key() == Qt.Key_Left:
+            if self.images:
+                self.index = (self.index - 1) % len(self.images)
+                self.update_image()
+            return
+
+        super().keyPressEvent(event)
+
+
 class FilmFlipWindow(QWidget):
 
     def __init__(self):
         super().__init__()
 
         self.setWindowTitle("🎞 FilmFlip v0.7")
-        self.resize(800, 600)
+        self.resize(900, 650)
         self.setAcceptDrops(True)
 
         self.images = []
+        self.thumbnail_cache = {}
 
         layout = QVBoxLayout()
 
@@ -68,7 +178,9 @@ class FilmFlipWindow(QWidget):
         )
 
         self.table = ImageTable()
+        self.table.setIconSize(QSize(72, 72))
         self.table.orderChanged.connect(self.sync_order)
+        self.table.cellDoubleClicked.connect(self.open_preview_from_row)
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.button)
@@ -87,6 +199,7 @@ class FilmFlipWindow(QWidget):
 
     def load_folder(self, folder):
         self.images = find_images(folder)
+        self.thumbnail_cache = {}
         self.refresh_preview()
 
         enabled = len(self.images) > 0
@@ -100,11 +213,37 @@ class FilmFlipWindow(QWidget):
                 "이미지가 없습니다.",
             )
 
+    def thumbnail_item(self, image):
+        cache_key = str(image)
+        pixmap = self.thumbnail_cache.get(cache_key)
+
+        if pixmap is None:
+            pixmap = QPixmap(cache_key)
+
+            if not pixmap.isNull():
+                pixmap = pixmap.scaled(
+                    QSize(72, 72),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+
+            self.thumbnail_cache[cache_key] = pixmap
+
+        item = QTableWidgetItem()
+        item.setData(Qt.UserRole, str(image))
+
+        if pixmap is not None and not pixmap.isNull():
+            item.setIcon(QIcon(pixmap))
+        else:
+            item.setText("이미지")
+
+        return item
+
     def refresh_preview(self):
         """
         self.images를 기준으로 테이블을 다시 그린다.
-        첫 번째 컬럼에는 실제 원본 파일 경로를 UserRole에 저장해서
-        드래그 후 순서 동기화가 파일명 표시와 섞이지 않게 한다.
+        현재 파일명 컬럼에는 실제 원본 파일 경로를 UserRole에 저장해서
+        드래그 후 순서 동기화가 표시 텍스트와 섞이지 않게 한다.
         """
 
         self.table.blockSignals(True)
@@ -113,6 +252,14 @@ class FilmFlipWindow(QWidget):
         self.table.setRowCount(len(preview))
 
         for row, (image, old_name, new_name) in enumerate(preview):
+            self.table.setRowHeight(row, 84)
+
+            self.table.setItem(
+                row,
+                0,
+                self.thumbnail_item(image),
+            )
+
             old_item = QTableWidgetItem(
                 f"{row + 1}. {old_name}"
             )
@@ -121,8 +268,8 @@ class FilmFlipWindow(QWidget):
             new_item = QTableWidgetItem(new_name)
             new_item.setData(Qt.UserRole, str(image))
 
-            self.table.setItem(row, 0, old_item)
-            self.table.setItem(row, 1, new_item)
+            self.table.setItem(row, 1, old_item)
+            self.table.setItem(row, 2, new_item)
 
         self.info.setText(
             f"📷 {len(preview)}개의 이미지를 찾았습니다."
@@ -144,7 +291,7 @@ class FilmFlipWindow(QWidget):
         new_images = []
 
         for row in range(self.table.rowCount()):
-            item = self.table.item(row, 0)
+            item = self.table.item(row, 1)
 
             if item is None:
                 continue
@@ -156,7 +303,18 @@ class FilmFlipWindow(QWidget):
 
         if len(new_images) == len(self.images):
             self.images = new_images
-            # 드래그 중에는 테이블을 다시 그리지 않아 반응속도 향상
+            # 드래그 직후에는 테이블을 다시 그리지 않아 반응속도를 유지한다.
+
+    def open_preview_from_row(self, row, _column):
+        if row < 0 or row >= len(self.images):
+            return
+
+        dialog = ImagePreviewDialog(
+            self.images,
+            row,
+            self,
+        )
+        dialog.exec()
 
     def reverse_rename(self):
         preview = build_preview(self.images)
