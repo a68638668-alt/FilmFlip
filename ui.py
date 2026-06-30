@@ -35,7 +35,7 @@ class ImagePreviewDialog(QDialog):
         self.pixmap_cache = {}
 
         self.setWindowTitle("FilmFlip Preview")
-        self.resize(1500, 900)
+        self.resize(1000, 750)
 
         layout = QVBoxLayout()
 
@@ -182,7 +182,8 @@ class FilmFlipWindow(QWidget):
         )
 
         self.table = ImageTable()
-        self.table.setIconSize(QSize(72, 72))
+        self.table.setColumnWidth(0, 156)
+        self.table.setIconSize(QSize(140, 105))
         self.table.orderChanged.connect(self.sync_order)
         self.table.cellDoubleClicked.connect(self.open_preview_from_row)
 
@@ -197,13 +198,6 @@ class FilmFlipWindow(QWidget):
         layout.addSpacing(10)
         layout.addLayout(buttons)
         layout.addWidget(self.info)
-        try:
-            self.table.setColumnWidth(0, 150)
-            self.table.setColumnWidth(1, 620)
-            self.table.horizontalHeader().setStretchLastSection(True)
-        except Exception:
-            pass
-
         layout.addWidget(self.table)
 
         self.setLayout(layout)
@@ -232,8 +226,7 @@ class FilmFlipWindow(QWidget):
             pixmap = QPixmap(cache_key)
 
             if not pixmap.isNull():
-                pixmap = pixmap.scaled(
-                    QSize(72, 72),
+                pixmap = pixmap.scaled(QSize(140, 105),
                     Qt.KeepAspectRatio,
                     Qt.SmoothTransformation,
                 )
@@ -263,7 +256,7 @@ class FilmFlipWindow(QWidget):
         self.table.setRowCount(len(preview))
 
         for row, (image, old_name, new_name) in enumerate(preview):
-            self.table.setRowHeight(row, 84)
+            self.table.setRowHeight(row, 122)
 
             self.table.setItem(
                 row,
