@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (
 )
 
 from dragdrop import ImageTable
-from engine import find_images, build_preview
+from engine import find_images, build_preview, rename_images
+from dialog import confirm_rename, rename_finished, rename_failed
 
 
 class FilmFlipWindow(QWidget):
@@ -43,6 +44,7 @@ class FilmFlipWindow(QWidget):
         self.rename_button = QPushButton("🔄 Rename")
         self.rename_button.setMinimumHeight(45)
         self.rename_button.setEnabled(False)
+        self.rename_button.clicked.connect(self.rename_files)
 
         self.info = QLabel(
             "폴더를 선택하거나 폴더를 이 창으로 드래그하세요."
@@ -102,6 +104,25 @@ class FilmFlipWindow(QWidget):
         self.info.setText(
             f"📷 {len(preview)}개의 이미지를 찾았습니다."
         )
+
+
+
+    def rename_files(self):
+
+        preview = build_preview(self.images)
+
+        if not preview:
+            return
+
+        if not confirm_rename(self, len(preview)):
+            return
+
+        try:
+            rename_images(preview)
+            rename_finished(self, len(preview))
+            self.load_folder(preview[0][0].parent)
+        except Exception as error:
+            rename_failed(self, str(error))
 
     def select_folder(self):
 
