@@ -194,7 +194,6 @@ class FilmFlipWindow(QWidget):
         self.table.orderChanged.connect(self.sync_order)
         self.table.cellDoubleClicked.connect(self.open_preview_from_row)
         self.table.rowDoubleClicked.connect(self.open_preview_from_row_only)
-        self.table.rowDoubleClicked.connect(self.open_preview_from_row_only)
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.button)
@@ -323,10 +322,8 @@ class FilmFlipWindow(QWidget):
                 self.table.setRowHeight(row,122)
 
     def open_preview_from_row_only(self, row):
-        self.open_preview_from_row(row,0)
+        self.open_preview_from_row(row, 0)
 
-    def open_preview_from_row_only(self,row):
-        self.open_preview_from_row(row,0)
 
     def open_preview_from_row(self, row, _column):
         if row < 0 or row >= len(self.images):
