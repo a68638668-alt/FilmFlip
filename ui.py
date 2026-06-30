@@ -26,9 +26,8 @@ class FilmFlipWindow(QWidget):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("🎞 FilmFlip v0.6")
+        self.setWindowTitle("🎞 FilmFlip v0.7")
         self.resize(800, 600)
-
         self.setAcceptDrops(True)
 
         self.images = []
@@ -36,10 +35,12 @@ class FilmFlipWindow(QWidget):
         layout = QVBoxLayout()
 
         title = QLabel("🎞 FilmFlip")
-        title.setStyleSheet("""
+        title.setStyleSheet(
+            """
             font-size:30px;
             font-weight:bold;
-        """)
+            """
+        )
 
         subtitle = QLabel("필름 스캔 파일 역순 정렬")
 
@@ -67,17 +68,17 @@ class FilmFlipWindow(QWidget):
         )
 
         self.table = ImageTable()
-        self.table.orderChanged.connect(self.refresh_preview)
+        self.table.orderChanged.connect(self.sync_order)
 
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-        layout.addSpacing(10)
         buttons = QHBoxLayout()
         buttons.addWidget(self.button)
         buttons.addWidget(self.reverse_button)
         buttons.addWidget(self.rename_button)
         buttons.addWidget(self.undo_button)
 
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addSpacing(10)
         layout.addLayout(buttons)
         layout.addWidget(self.info)
         layout.addWidget(self.table)
@@ -85,16 +86,14 @@ class FilmFlipWindow(QWidget):
         self.setLayout(layout)
 
     def load_folder(self, folder):
-
         self.images = find_images(folder)
-
         self.refresh_preview()
 
         enabled = len(self.images) > 0
         self.reverse_button.setEnabled(enabled)
         self.rename_button.setEnabled(enabled)
 
-        if len(self.images) == 0:
+        if not enabled:
             QMessageBox.information(
                 self,
                 "FilmFlip",
@@ -102,34 +101,64 @@ class FilmFlipWindow(QWidget):
             )
 
     def refresh_preview(self):
+        """
+        self.images를 기준으로 테이블을 다시 그린다.
+        첫 번째 컬럼에는 실제 원본 파일 경로를 UserRole에 저장해서
+        드래그 후 순서 동기화가 파일명 표시와 섞이지 않게 한다.
+        """
+
+        self.table.blockSignals(True)
 
         preview = build_preview(self.images)
-
         self.table.setRowCount(len(preview))
 
-        for row, (_, old_name, new_name) in enumerate(preview):
-
-            self.table.setItem(
-                row,
-                0,
-                QTableWidgetItem(old_name),
+        for row, (image, old_name, new_name) in enumerate(preview):
+            old_item = QTableWidgetItem(
+                f"{row + 1}. {old_name}"
             )
+            old_item.setData(Qt.UserRole, str(image))
 
-            self.table.setItem(
-                row,
-                1,
-                QTableWidgetItem(new_name),
-            )
+            new_item = QTableWidgetItem(new_name)
+            new_item.setData(Qt.UserRole, str(image))
+
+            self.table.setItem(row, 0, old_item)
+            self.table.setItem(row, 1, new_item)
 
         self.info.setText(
             f"📷 {len(preview)}개의 이미지를 찾았습니다."
         )
 
+        self.table.blockSignals(False)
 
+    def sync_order(self):
+        """
+        테이블에서 사용자가 드래그로 바꾼 행 순서를 self.images에 반영한다.
+        표시 텍스트가 아니라 Qt.UserRole에 저장한 실제 파일 경로로 매칭한다.
+        """
 
+        path_map = {
+            str(image): image
+            for image in self.images
+        }
+
+        new_images = []
+
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+
+            if item is None:
+                continue
+
+            image_path = item.data(Qt.UserRole)
+
+            if image_path in path_map:
+                new_images.append(path_map[image_path])
+
+        if len(new_images) == len(self.images):
+            self.images = new_images
+            # 드래그 중에는 테이블을 다시 그리지 않아 반응속도 향상
 
     def reverse_rename(self):
-
         preview = build_preview(self.images)
 
         if not preview:
@@ -138,14 +167,13 @@ class FilmFlipWindow(QWidget):
         try:
             rename_images(preview)
             rename_finished(self, len(preview))
-            self.undo_button.setEnabled(True)
             self.load_folder(preview[0][0].parent)
+            self.undo_button.setEnabled(True)
 
         except Exception as error:
             rename_failed(self, str(error))
 
     def rename_files(self):
-
         dialog = RenameDialog(self)
 
         if dialog.exec() != QDialog.Accepted:
@@ -165,29 +193,26 @@ class FilmFlipWindow(QWidget):
         try:
             rename_images(preview)
             rename_finished(self, len(preview))
-            self.undo_button.setEnabled(True)
             self.load_folder(preview[0][0].parent)
+            self.undo_button.setEnabled(True)
 
         except Exception as error:
             rename_failed(self, str(error))
 
-
-
     def undo_last(self):
-
         if not self.images or not engine.LAST_UNDO:
             return
 
         try:
-            undo_rename(self.images[0].parent, engine.LAST_UNDO)
+            folder = self.images[0].parent
+            undo_rename(folder, engine.LAST_UNDO)
             self.undo_button.setEnabled(False)
-            self.load_folder(self.images[0].parent)
+            self.load_folder(folder)
 
         except Exception as error:
             rename_failed(self, str(error))
 
     def select_folder(self):
-
         folder = QFileDialog.getExistingDirectory(
             self,
             "폴더 선택",
@@ -197,9 +222,9 @@ class FilmFlipWindow(QWidget):
             return
 
         self.load_folder(folder)
+        self.undo_button.setEnabled(False)
 
     def dragEnterEvent(self, event):
-
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
 
@@ -210,23 +235,28 @@ class FilmFlipWindow(QWidget):
         event.ignore()
 
     def dragMoveEvent(self, event):
-
         event.acceptProposedAction()
 
     def dropEvent(self, event):
-
         import os
 
-        url = event.mimeData().urls()[0]
-        folder = url.toLocalFile()
+        urls = event.mimeData().urls()
+
+        if not urls:
+            event.ignore()
+            return
+
+        folder = urls[0].toLocalFile()
 
         if os.path.isdir(folder):
             self.load_folder(folder)
-        else:
-            QMessageBox.warning(
-                self,
-                "FilmFlip",
-                "폴더만 드롭할 수 있습니다.",
-            )
+            self.undo_button.setEnabled(False)
+            event.acceptProposedAction()
+            return
 
-        event.acceptProposedAction()
+        QMessageBox.warning(
+            self,
+            "FilmFlip",
+            "폴더만 드롭할 수 있습니다.",
+        )
+        event.ignore()
