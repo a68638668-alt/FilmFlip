@@ -35,7 +35,7 @@ class ImagePreviewDialog(QDialog):
         self.pixmap_cache = {}
 
         self.setWindowTitle("FilmFlip Preview")
-        self.resize(1000, 750)
+        self.resize(1500, 900)
 
         layout = QVBoxLayout()
 
@@ -139,7 +139,7 @@ class FilmFlipWindow(QWidget):
 
         self.settings = load_settings()
 
-        self.setWindowTitle("🎞 FilmFlip v0.7")
+        self.setWindowTitle("🎞 FilmFlip v0.9")
         self.resize(900, 650)
         self.setAcceptDrops(True)
 
@@ -197,6 +197,13 @@ class FilmFlipWindow(QWidget):
         layout.addSpacing(10)
         layout.addLayout(buttons)
         layout.addWidget(self.info)
+        try:
+            self.table.setColumnWidth(0, 150)
+            self.table.setColumnWidth(1, 620)
+            self.table.horizontalHeader().setStretchLastSection(True)
+        except Exception:
+            pass
+
         layout.addWidget(self.table)
 
         self.setLayout(layout)
