@@ -65,13 +65,12 @@ class ImageTable(QTableWidget):
         self.setDefaultDropAction(Qt.MoveAction)
 
         self.setAlternatingRowColors(True)
+        # 썸네일 위에서 마우스를 움직일 때마다 hover 스타일이
+        # 셀 전체 repaint를 유발할 수 있어 선택 색상만 유지한다.
         self.setStyleSheet(
             """
             QTableWidget::item:selected {
                 background-color: #3f5f8f;
-            }
-            QTableWidget::item:hover {
-                background-color: #333333;
             }
             """
         )

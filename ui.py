@@ -1,7 +1,7 @@
 from pathlib import Path
 import sys
-from PySide6.QtCore import Qt, QSize, QTimer
-from PySide6.QtGui import QPixmap, QIcon, QGuiApplication, QImageReader
+from PySide6.QtCore import Qt, QSize, QTimer, QUrl, Signal
+from PySide6.QtGui import QPixmap, QIcon, QGuiApplication, QImageReader, QDesktopServices
 from PySide6.QtWidgets import (
     QWidget,
     QLabel,
@@ -14,6 +14,9 @@ from PySide6.QtWidgets import (
     QDialog,
     QSizePolicy,
     QApplication,
+    QComboBox,
+    QFrame,
+    QAbstractItemView,
 )
 
 from dragdrop import ImageTable
@@ -30,7 +33,29 @@ from dialog import (
 
 THUMBNAIL_SIZE = QSize(140, 105)
 ROW_HEIGHT = 122
-THUMBNAIL_BATCH_SIZE = 2
+THUMBNAIL_BATCH_SIZE = 1
+
+THUMBNAIL_PRESETS = {
+    "small": {
+        "label": "작게",
+        "size": QSize(110, 82),
+        "row_height": 98,
+        "column_width": 126,
+    },
+    "medium": {
+        "label": "보통",
+        "size": QSize(140, 105),
+        "row_height": 122,
+        "column_width": 156,
+    },
+    "large": {
+        "label": "크게",
+        "size": QSize(170, 128),
+        "row_height": 148,
+        "column_width": 186,
+    },
+}
+DEFAULT_THUMBNAIL_PRESET = "medium"
 
 
 class ImagePreviewDialog(QDialog):
@@ -87,7 +112,7 @@ class ImagePreviewDialog(QDialog):
         pixmap = self.pixmap_cache.get(cache_key)
 
         if pixmap is None:
-            pixmap = QPixmap(cache_key)
+            pixmap = QPixmap(str(image))
             self.pixmap_cache[cache_key] = pixmap
 
         return pixmap
@@ -145,6 +170,18 @@ class ImagePreviewDialog(QDialog):
         super().keyPressEvent(event)
 
 
+class FolderStatusLabel(QLabel):
+    clicked = Signal()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+
+        super().mousePressEvent(event)
+
+
 class FilmFlipWindow(QWidget):
 
     def __init__(self):
@@ -152,18 +189,28 @@ class FilmFlipWindow(QWidget):
 
         self.settings = load_settings()
 
-        self.setWindowTitle("🎞 FilmFlip v1.1")
+        self.setWindowTitle("🎞 FilmFlip v1.2-dev")
         self.resize(900, 650)
         self.setAcceptDrops(True)
 
         self.images = []
+        self.current_folder = None
         self.thumbnail_cache = {}
         self.thumbnail_queue = []
         self.thumbnail_generation = 0
 
         self.thumbnail_timer = QTimer(self)
-        self.thumbnail_timer.setInterval(0)
+        self.thumbnail_timer.setInterval(12)
         self.thumbnail_timer.timeout.connect(self.process_thumbnail_queue)
+
+        self.thumbnail_preset_key = self.settings.get(
+            "thumbnail_size",
+            DEFAULT_THUMBNAIL_PRESET,
+        )
+        if self.thumbnail_preset_key not in THUMBNAIL_PRESETS:
+            self.thumbnail_preset_key = DEFAULT_THUMBNAIL_PRESET
+
+        self.apply_thumbnail_preset(self.thumbnail_preset_key, save=False)
 
         layout = QVBoxLayout()
 
@@ -196,22 +243,81 @@ class FilmFlipWindow(QWidget):
         self.undo_button.setEnabled(False)
         self.undo_button.clicked.connect(self.undo_last)
 
+        # 상단 작업 버튼은 썸네일 설정 영역 전까지 자연스럽게 닿도록
+        # 고정 폭을 조금 넓혀 배치한다.
+        for top_button in [
+            self.button,
+            self.reverse_button,
+            self.rename_button,
+        ]:
+            top_button.setFixedWidth(200)
+            top_button.setSizePolicy(
+                QSizePolicy.Fixed,
+                QSizePolicy.Fixed,
+            )
+
+        self.undo_button.setFixedWidth(180)
+        self.undo_button.setSizePolicy(
+            QSizePolicy.Fixed,
+            QSizePolicy.Fixed,
+        )
+
         self.info = QLabel(
             "폴더를 선택하거나 폴더를 이 창으로 드래그하세요."
         )
 
         self.table = ImageTable()
-        self.table.setColumnWidth(0, 156)
-        self.table.setIconSize(THUMBNAIL_SIZE)
+        self.apply_thumbnail_table_settings()
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.table.verticalScrollBar().setSingleStep(36)
         self.table.orderChanged.connect(self.sync_order)
         self.table.cellDoubleClicked.connect(self.open_preview_from_row)
         self.table.rowDoubleClicked.connect(self.open_preview_from_row_only)
 
         buttons = QHBoxLayout()
+        buttons.setSpacing(16)
         buttons.addWidget(self.button)
         buttons.addWidget(self.reverse_button)
         buttons.addWidget(self.rename_button)
         buttons.addWidget(self.undo_button)
+        buttons.addStretch(1)
+
+        self.thumbnail_combo = QComboBox()
+        self.thumbnail_combo.setMaximumWidth(90)
+        self.thumbnail_combo.setToolTip("썸네일 크기를 변경합니다.")
+        for key, preset in THUMBNAIL_PRESETS.items():
+            self.thumbnail_combo.addItem(preset["label"], key)
+        current_index = self.thumbnail_combo.findData(self.thumbnail_preset_key)
+        if current_index >= 0:
+            self.thumbnail_combo.setCurrentIndex(current_index)
+        self.thumbnail_combo.currentIndexChanged.connect(self.change_thumbnail_preset)
+
+        thumbnail_label = QLabel("썸네일")
+        buttons.addWidget(thumbnail_label)
+        buttons.addWidget(self.thumbnail_combo)
+
+        self.status_bar = QFrame()
+        self.status_bar.setFrameShape(QFrame.StyledPanel)
+        self.status_bar.setMinimumHeight(34)
+
+        status_layout = QHBoxLayout(self.status_bar)
+        status_layout.setContentsMargins(10, 4, 10, 4)
+
+        self.folder_status = FolderStatusLabel()
+        self.folder_status.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.folder_status.setCursor(Qt.PointingHandCursor)
+        self.folder_status.clicked.connect(self.open_current_folder)
+        self.folder_status.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Preferred,
+        )
+
+        self.count_status = QLabel()
+        self.count_status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        status_layout.addWidget(self.folder_status, stretch=1)
+        status_layout.addWidget(self.count_status)
+        self.update_status_bar()
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -219,11 +325,97 @@ class FilmFlipWindow(QWidget):
         layout.addLayout(buttons)
         layout.addWidget(self.info)
         layout.addWidget(self.table)
+        layout.addWidget(self.status_bar)
 
         self.setLayout(layout)
 
+    def apply_thumbnail_preset(self, preset_key, save=True):
+        preset = THUMBNAIL_PRESETS.get(
+            preset_key,
+            THUMBNAIL_PRESETS[DEFAULT_THUMBNAIL_PRESET],
+        )
+
+        self.thumbnail_preset_key = preset_key
+        self.thumbnail_size = preset["size"]
+        self.row_height = preset["row_height"]
+        self.thumbnail_column_width = preset["column_width"]
+
+        if save:
+            self.settings["thumbnail_size"] = preset_key
+            save_settings(self.settings)
+
+    def apply_thumbnail_table_settings(self):
+        if not hasattr(self, "table"):
+            return
+
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setIconSize(self.thumbnail_size)
+            self.table.setColumnWidth(0, self.thumbnail_column_width)
+            self.table.ROW_HEIGHT = self.row_height
+            self.table.THUMBNAIL_COLUMN_WIDTH = self.thumbnail_column_width
+
+            vertical_header = self.table.verticalHeader()
+            vertical_header.setDefaultSectionSize(self.row_height)
+            vertical_header.setMinimumSectionSize(self.row_height)
+
+            for row in range(self.table.rowCount()):
+                self.table.setRowHeight(row, self.row_height)
+        finally:
+            self.table.setUpdatesEnabled(True)
+
+    def change_thumbnail_preset(self, _index):
+        preset_key = self.thumbnail_combo.currentData()
+        if not preset_key or preset_key == self.thumbnail_preset_key:
+            return
+
+        self.apply_thumbnail_preset(preset_key)
+        self.apply_thumbnail_table_settings()
+
+        if self.images:
+            self.refresh_preview()
+
+    def update_status_bar(self):
+        if self.current_folder is None:
+            self.folder_status.setText("📂 현재 폴더: 없음")
+            self.folder_status.setToolTip("폴더를 선택하면 전체 경로가 표시됩니다.")
+            self.count_status.setText("")
+            return
+
+        self.folder_status.setText(f"📂 현재 폴더: {self.current_folder.name}")
+        self.folder_status.setToolTip(str(self.current_folder))
+        self.count_status.setText(f"📸 {len(self.images)}장")
+
+    def open_current_folder(self):
+        if self.current_folder is None:
+            return
+
+        if not self.current_folder.exists():
+            QMessageBox.warning(
+                self,
+                "FilmFlip",
+                "현재 폴더를 찾을 수 없습니다.",
+            )
+            return
+
+        QDesktopServices.openUrl(
+            QUrl.fromLocalFile(str(self.current_folder))
+        )
+
+    def mark_rename_completed(self):
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 2)
+            if item is None:
+                item = QTableWidgetItem()
+                self.table.setItem(row, 2, item)
+
+            item.setText("✔ 변경 완료")
+            item.setTextAlignment(Qt.AlignCenter)
+
     def load_folder(self, folder):
         self.cancel_thumbnail_loading()
+        self.current_folder = Path(folder)
+        self.update_status_bar()
         self.info.setText("📂 폴더를 읽는 중입니다...")
         self.set_controls_enabled(False)
         QApplication.processEvents()
@@ -235,6 +427,7 @@ class FilmFlipWindow(QWidget):
 
         self.thumbnail_cache = {}
         self.refresh_preview()
+        self.update_status_bar()
 
         enabled = len(self.images) > 0
         self.reverse_button.setEnabled(enabled)
@@ -263,13 +456,15 @@ class FilmFlipWindow(QWidget):
     def placeholder_thumbnail_item(self, image):
         item = QTableWidgetItem("로딩 중")
         item.setData(Qt.UserRole, str(image))
+        item.setTextAlignment(Qt.AlignCenter)
         return item
 
     def cached_thumbnail_item(self, image):
         item = QTableWidgetItem()
         item.setData(Qt.UserRole, str(image))
+        item.setTextAlignment(Qt.AlignCenter)
 
-        pixmap = self.thumbnail_cache.get(str(image))
+        pixmap = self.thumbnail_cache.get(self.thumbnail_cache_key(image))
 
         if pixmap is not None and not pixmap.isNull():
             item.setIcon(QIcon(pixmap))
@@ -278,8 +473,12 @@ class FilmFlipWindow(QWidget):
 
         return item
 
+    def thumbnail_cache_key(self, image):
+        return f"{self.thumbnail_size.width()}x{self.thumbnail_size.height()}:{image}"
+
     def make_thumbnail(self, image):
-        cache_key = str(image)
+        image_path = str(image)
+        cache_key = self.thumbnail_cache_key(image)
         pixmap = self.thumbnail_cache.get(cache_key)
 
         if pixmap is not None:
@@ -290,13 +489,13 @@ class FilmFlipWindow(QWidget):
         # 작은 썸네일에서 화질이 크게 무너질 수 있다.
         # QImageReader로 필요한 크기 근처까지 줄여 읽고, 마지막 축소는
         # SmoothTransformation으로 처리해서 체감 속도와 품질을 같이 잡는다.
-        reader = QImageReader(cache_key)
+        reader = QImageReader(image_path)
         reader.setAutoTransform(True)
 
         original_size = reader.size()
         if original_size.isValid():
             scaled_size = original_size.scaled(
-                THUMBNAIL_SIZE * 2,
+                self.thumbnail_size * 2,
                 Qt.KeepAspectRatio,
             )
             reader.setScaledSize(scaled_size)
@@ -304,13 +503,13 @@ class FilmFlipWindow(QWidget):
         image_data = reader.read()
 
         if image_data.isNull():
-            pixmap = QPixmap(cache_key)
+            pixmap = QPixmap(image_path)
         else:
             pixmap = QPixmap.fromImage(image_data)
 
         if not pixmap.isNull():
             pixmap = pixmap.scaled(
-                THUMBNAIL_SIZE,
+                self.thumbnail_size,
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation,
             )
@@ -363,7 +562,7 @@ class FilmFlipWindow(QWidget):
             else:
                 item.setText("이미지")
 
-            self.table.setRowHeight(row, ROW_HEIGHT)
+            self.table.setRowHeight(row, self.row_height)
             processed += 1
 
         if not self.thumbnail_queue:
@@ -391,7 +590,7 @@ class FilmFlipWindow(QWidget):
             self.table.setRowCount(len(preview))
 
             for row, (image, old_name, new_name) in enumerate(preview):
-                self.table.setRowHeight(row, ROW_HEIGHT)
+                self.table.setRowHeight(row, self.row_height)
 
                 self.table.setItem(
                     row,
@@ -422,6 +621,8 @@ class FilmFlipWindow(QWidget):
 
         if not self.images:
             self.info.setText("이미지가 없습니다.")
+
+        self.update_status_bar()
 
     def sync_order(self):
         """
@@ -455,7 +656,7 @@ class FilmFlipWindow(QWidget):
             self.table.setUpdatesEnabled(False)
             try:
                 for row in range(self.table.rowCount()):
-                    self.table.setRowHeight(row, ROW_HEIGHT)
+                    self.table.setRowHeight(row, self.row_height)
             finally:
                 self.table.setUpdatesEnabled(True)
 
@@ -483,6 +684,8 @@ class FilmFlipWindow(QWidget):
             rename_images(preview)
             rename_finished(self, len(preview))
             self.load_folder(preview[0][0].parent)
+            self.mark_rename_completed()
+            self.info.setText(f"✔ 파일 이름 변경 완료 ({len(preview)}개)")
             self.undo_button.setEnabled(True)
 
         except Exception as error:
@@ -509,6 +712,8 @@ class FilmFlipWindow(QWidget):
             rename_images(preview)
             rename_finished(self, len(preview))
             self.load_folder(preview[0][0].parent)
+            self.mark_rename_completed()
+            self.info.setText(f"✔ 파일 이름 변경 완료 ({len(preview)}개)")
             self.undo_button.setEnabled(True)
 
         except Exception as error:
@@ -567,6 +772,8 @@ class FilmFlipWindow(QWidget):
         folder = urls[0].toLocalFile()
 
         if os.path.isdir(folder):
+            self.settings["last_folder"] = folder
+            save_settings(self.settings)
             self.load_folder(folder)
             self.undo_button.setEnabled(False)
             event.acceptProposedAction()

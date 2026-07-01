@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QInputDialog,
     QApplication,
+    QSizePolicy,
 )
 
 
@@ -711,7 +712,7 @@ class RenameDialog(QDialog):
         super().__init__(parent)
 
         self.setWindowTitle("🎞 이름 변경")
-        self.resize(680, 760)
+        self.resize(680, 780)
         self.setMinimumWidth(640)
 
         self.presets = load_presets()
@@ -725,6 +726,20 @@ class RenameDialog(QDialog):
         self._preview_updates_suspended = 0
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        group_style = """
+            QGroupBox {
+                margin-top: 0px;
+            }
+        """
+
+        def add_section_title(text):
+            label = QLabel(text)
+            label.setContentsMargins(2, 6, 0, 2)
+            label.setStyleSheet("font-weight: 600;")
+            layout.addWidget(label)
+            return label
 
         description = QLabel(
             "기본 정보로 짧게 만들거나, 추가 정보를 열어 날짜/스캐너/메모까지 넣을 수 있습니다.\n"
@@ -732,8 +747,12 @@ class RenameDialog(QDialog):
         )
         layout.addWidget(description)
 
-        preset_group = QGroupBox("📚 촬영 프리셋")
+        add_section_title("📚 촬영 프리셋")
+        preset_group = QGroupBox()
+        preset_group.setStyleSheet(group_style)
         preset_layout = QHBoxLayout(preset_group)
+        preset_layout.setContentsMargins(12, 12, 12, 12)
+        preset_layout.setSpacing(10)
 
         self.shooting_combo = QComboBox()
         self.shooting_combo.addItem("없음", None)
@@ -772,8 +791,13 @@ class RenameDialog(QDialog):
 
         layout.addWidget(preset_group)
 
-        basic_group = QGroupBox("기본 정보")
+        add_section_title("기본 정보")
+        basic_group = QGroupBox()
+        basic_group.setStyleSheet(group_style)
         basic_grid = QGridLayout(basic_group)
+        basic_grid.setContentsMargins(14, 14, 14, 14)
+        basic_grid.setHorizontalSpacing(12)
+        basic_grid.setVerticalSpacing(12)
 
         self.camera_combo = self._create_combo("camera")
         self.film_combo = self._create_combo("film")
@@ -790,11 +814,16 @@ class RenameDialog(QDialog):
         self.additional_toggle = QPushButton("📄 추가 정보 ▶")
         self.additional_toggle.setCheckable(True)
         self.additional_toggle.setChecked(False)
+        self.additional_toggle.setMinimumHeight(28)
         self.additional_toggle.clicked.connect(self.toggle_additional_info)
         layout.addWidget(self.additional_toggle)
 
-        self.additional_group = QGroupBox("📄 추가 정보")
+        self.additional_group = QGroupBox()
+        self.additional_group.setStyleSheet(group_style)
         additional_grid = QGridLayout(self.additional_group)
+        additional_grid.setContentsMargins(14, 14, 14, 14)
+        additional_grid.setHorizontalSpacing(12)
+        additional_grid.setVerticalSpacing(12)
 
         self.date_edit = KoreanAwareLineEdit()
         self.date_edit.setPlaceholderText("예: 2026-07-01, 20260701, 260701")
@@ -824,14 +853,19 @@ class RenameDialog(QDialog):
         layout.addWidget(self.additional_group)
         self.additional_group.setVisible(False)
 
-        order_group = QGroupBox("파일명 구성")
+        add_section_title("파일명 구성")
+        order_group = QGroupBox()
+        order_group.setStyleSheet(group_style)
+        order_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         order_layout = QVBoxLayout(order_group)
+        order_layout.setContentsMargins(14, 14, 14, 14)
+        order_layout.setSpacing(8)
 
         guide = QLabel("체크로 사용 여부를 정하고, ▲/▼ 버튼으로 순서를 바꿀 수 있습니다.")
         order_layout.addWidget(guide)
 
         self.template_list = TemplateListWidget()
-        self.template_list.setMaximumHeight(230)
+        self.template_list.setFixedHeight(190)
         order_layout.addWidget(self.template_list)
 
         move_buttons = QHBoxLayout()
@@ -864,7 +898,7 @@ class RenameDialog(QDialog):
         layout.addWidget(self.reverse_radio)
 
         self.example = QLabel()
-        self.example.setMinimumHeight(80)
+        self.example.setMinimumHeight(70)
         layout.addWidget(self.example)
 
         for combo in [
@@ -897,11 +931,33 @@ class RenameDialog(QDialog):
         layout.addWidget(buttons)
 
         self.update_preview()
+        QTimer.singleShot(0, self._resize_for_additional_info)
 
     def toggle_additional_info(self):
         expanded = self.additional_toggle.isChecked()
         self.additional_group.setVisible(expanded)
         self.additional_toggle.setText("📄 추가 정보 ▼" if expanded else "📄 추가 정보 ▶")
+        QTimer.singleShot(0, self._resize_for_additional_info)
+
+    def _resize_for_additional_info(self):
+        self.adjustSize()
+
+        screen = QApplication.screenAt(self.frameGeometry().center())
+        if screen is None:
+            screen = QApplication.primaryScreen()
+
+        max_height = 900
+        if screen is not None:
+            max_height = max(640, screen.availableGeometry().height() - 80)
+
+        target_width = max(self.width(), 680)
+        target_height = self.sizeHint().height()
+
+        # 추가 정보 접기/펼치기에 맞춰 창 높이를 자연스럽게 다시 계산한다.
+        # 펼쳤을 때도 화면보다 커지지 않게 제한하고, 접으면 이전 큰 높이를 유지하지 않는다.
+        target_height = min(max(target_height, 640), max_height)
+
+        self.resize(target_width, target_height)
 
     def _suspend_preview_updates(self):
         self._preview_updates_suspended += 1
