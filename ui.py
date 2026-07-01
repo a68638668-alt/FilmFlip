@@ -21,11 +21,12 @@ from PySide6.QtWidgets import (
 
 from dragdrop import ImageTable
 import engine
-from engine import find_images, build_preview, rename_images, undo_rename
+from engine import find_images, build_preview, rename_images, undo_rename, rename_folder, undo_folder
 from settings import load_settings, save_settings
 
 from dialog import (
     RenameDialog,
+    FolderRenameDialog,
     rename_finished,
     rename_failed,
 )
@@ -315,7 +316,13 @@ class FilmFlipWindow(QWidget):
         self.count_status = QLabel()
         self.count_status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
+        self.folder_rename_button = QPushButton("폴더명 변경")
+        self.folder_rename_button.setEnabled(False)
+        self.folder_rename_button.setToolTip("현재 선택한 폴더 이름을 메타데이터 기준으로 변경합니다.")
+        self.folder_rename_button.clicked.connect(self.rename_current_folder)
+
         status_layout.addWidget(self.folder_status, stretch=1)
+        status_layout.addWidget(self.folder_rename_button)
         status_layout.addWidget(self.count_status)
         self.update_status_bar()
 
@@ -380,11 +387,15 @@ class FilmFlipWindow(QWidget):
             self.folder_status.setText("📂 현재 폴더: 없음")
             self.folder_status.setToolTip("폴더를 선택하면 전체 경로가 표시됩니다.")
             self.count_status.setText("")
+            if hasattr(self, "folder_rename_button"):
+                self.folder_rename_button.setEnabled(False)
             return
 
         self.folder_status.setText(f"📂 현재 폴더: {self.current_folder.name}")
         self.folder_status.setToolTip(str(self.current_folder))
         self.count_status.setText(f"📸 {len(self.images)}장")
+        if hasattr(self, "folder_rename_button"):
+            self.folder_rename_button.setEnabled(True)
 
     def open_current_folder(self):
         if self.current_folder is None:
@@ -674,6 +685,58 @@ class FilmFlipWindow(QWidget):
         )
         dialog.exec()
 
+    def rename_current_folder(self):
+        if self.current_folder is None:
+            return
+
+        dialog = FolderRenameDialog(self.current_folder, self)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        options = dialog.values()
+        new_name = options.get("template", "").strip()
+
+        if not new_name:
+            QMessageBox.warning(
+                self,
+                "FilmFlip",
+                "새 폴더명이 비어 있습니다.",
+            )
+            return
+
+        if new_name == self.current_folder.name:
+            QMessageBox.information(
+                self,
+                "FilmFlip",
+                "현재 폴더명과 같습니다.",
+            )
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "FilmFlip",
+            f"폴더명을 변경할까요?\n\n{self.current_folder.name}\n→ {new_name}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            new_folder = rename_folder(self.current_folder, new_name)
+            self.current_folder = new_folder
+            self.settings["last_folder"] = str(new_folder)
+            save_settings(self.settings)
+            self.load_folder(new_folder)
+            self.mark_rename_completed()
+            self.info.setText(f"✔ 폴더명 변경 완료: {new_folder.name}")
+            self.undo_button.setEnabled(True)
+
+        except Exception as error:
+            rename_failed(self, str(error))
+
     def reverse_rename(self):
         preview = build_preview(self.images)
 
@@ -720,14 +783,35 @@ class FilmFlipWindow(QWidget):
             rename_failed(self, str(error))
 
     def undo_last(self):
-        if not self.images or not engine.LAST_UNDO:
+        has_file_undo = bool(engine.LAST_UNDO)
+        has_folder_undo = bool(getattr(engine, "LAST_FOLDER_UNDO", None))
+
+        if not has_file_undo and not has_folder_undo:
             return
 
         try:
+            if has_folder_undo:
+                restored_folder = undo_folder(engine.LAST_FOLDER_UNDO)
+                engine.LAST_FOLDER_UNDO = None
+                self.undo_button.setEnabled(False)
+
+                if restored_folder is not None:
+                    self.current_folder = restored_folder
+                    self.settings["last_folder"] = str(restored_folder)
+                    save_settings(self.settings)
+                    self.load_folder(restored_folder)
+                    self.info.setText(f"↩ 폴더명 Undo 완료: {restored_folder.name}")
+                return
+
+            if not self.images:
+                return
+
             folder = self.images[0].parent
             undo_rename(folder, engine.LAST_UNDO)
+            engine.LAST_UNDO = []
             self.undo_button.setEnabled(False)
             self.load_folder(folder)
+            self.info.setText("↩ 파일명 Undo 완료")
 
         except Exception as error:
             rename_failed(self, str(error))

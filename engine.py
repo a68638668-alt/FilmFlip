@@ -176,7 +176,107 @@ def build_preview(
     return preview
 
 
+
+def build_folder_name(
+    template="{folder}",
+    date="",
+    camera="",
+    film="",
+    lab="",
+    place="",
+    scanner="",
+    memo="",
+    current_name="",
+):
+    """
+    폴더명 변경 미리보기용 이름 생성.
+
+    v1.2:
+    - 파일명 변경과 같은 메타데이터를 폴더명에도 사용할 수 있게 한다.
+    - 번호({n})는 폴더명에서는 사용하지 않는다.
+    """
+
+    resolved_template = _make_template(
+        template=template,
+        date=date,
+        camera=camera,
+        film=film,
+        lab=lab,
+        place=place,
+        scanner=scanner,
+        memo=memo,
+    )
+
+    folder_name = resolved_template.replace("{folder}", _safe_component(current_name))
+    folder_name = _safe_component(folder_name)
+
+    if not folder_name:
+        folder_name = _safe_component(current_name)
+
+    return folder_name
+
+
+def rename_folder(folder, new_name):
+    """
+    현재 선택한 폴더 자체의 이름을 변경한다.
+    반환값은 새 폴더 Path.
+
+    v1.2 dev9:
+    - 폴더명 변경도 Undo할 수 있도록 이전/이후 경로를 기록한다.
+    """
+
+    global LAST_UNDO, LAST_FOLDER_UNDO
+
+    folder_path = Path(folder)
+    safe_name = _safe_component(new_name)
+
+    if not safe_name:
+        raise ValueError("새 폴더명이 비어 있습니다.")
+
+    if safe_name == folder_path.name:
+        return folder_path
+
+    new_folder = folder_path.with_name(safe_name)
+
+    if new_folder.exists():
+        raise FileExistsError(f"이미 같은 이름의 폴더가 있습니다: {safe_name}")
+
+    folder_path.rename(new_folder)
+
+    LAST_UNDO = []
+    LAST_FOLDER_UNDO = {
+        "old_path": folder_path,
+        "new_path": new_folder,
+    }
+
+    return new_folder
+
+
+def undo_folder(folder_undo):
+    """
+    마지막 폴더명 변경을 되돌린다.
+    반환값은 복원된 폴더 Path.
+    """
+
+    if not folder_undo:
+        return None
+
+    old_path = Path(folder_undo["old_path"])
+    new_path = Path(folder_undo["new_path"])
+
+    if not new_path.exists():
+        raise FileNotFoundError(f"되돌릴 폴더를 찾을 수 없습니다: {new_path}")
+
+    if old_path.exists():
+        raise FileExistsError(f"복원할 폴더명이 이미 존재합니다: {old_path.name}")
+
+    new_path.rename(old_path)
+    return old_path
+
+
+
 LAST_UNDO = []
+LAST_FOLDER_UNDO = None
 
 
 def rename_images(preview):
@@ -186,8 +286,9 @@ def rename_images(preview):
     2차 : 최종 파일명으로 변경
     """
 
-    global LAST_UNDO
+    global LAST_UNDO, LAST_FOLDER_UNDO
     LAST_UNDO = build_undo_list(preview)
+    LAST_FOLDER_UNDO = None
 
     temp_files = []
     append_temp = temp_files.append
