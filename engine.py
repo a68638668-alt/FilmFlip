@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 IMAGE_EXTENSIONS = {
@@ -10,30 +11,64 @@ IMAGE_EXTENSIONS = {
     ".webp",
 }
 
+# Windows/macOS 파일명에서 문제가 될 수 있는 문자
+_INVALID_FILENAME_CHARS = str.maketrans({
+    "/": "",
+    "\\": "",
+    ":": "",
+    "*": "",
+    "?": "",
+    '"': "",
+    "<": "",
+    ">": "",
+    "|": "",
+})
+
 
 def find_images(folder):
-    images = sorted(
-        [
-            f
-            for f in Path(folder).iterdir()
-            if (
-                f.is_file()
-                and f.suffix.lower() in IMAGE_EXTENSIONS
-                and not f.name.startswith(".")
-            )
-        ]
-    )
+    """
+    폴더 안의 이미지 파일을 찾는다.
 
+    v1.1 perf:
+    - Path.iterdir() 대신 os.scandir() 사용
+      → 폴더 열 때 파일 타입 확인 비용을 줄임
+    - macOS 점파일/리소스 포크(._파일) 무시 유지
+    - 반환값은 기존과 동일하게 Path 리스트 유지
+    """
+
+    folder_path = Path(folder)
+    images = []
+
+    try:
+        with os.scandir(folder_path) as entries:
+            for entry in entries:
+                name = entry.name
+
+                if name.startswith("."):
+                    continue
+
+                suffix = os.path.splitext(name)[1].lower()
+                if suffix not in IMAGE_EXTENSIONS:
+                    continue
+
+                try:
+                    if not entry.is_file():
+                        continue
+                except OSError:
+                    continue
+
+                images.append(folder_path / name)
+
+    except (FileNotFoundError, NotADirectoryError, PermissionError):
+        return []
+
+    images.sort(key=lambda path: path.name.lower())
     return images
 
 
 def _safe_component(text):
     text = (text or "").strip()
-
-    for char in ['/', '\\', ':', '*', '?', '"', '<', '>', '|']:
-        text = text.replace(char, "")
-
-    return text.strip()
+    return text.translate(_INVALID_FILENAME_CHARS).strip()
 
 
 def _make_template(
@@ -67,11 +102,21 @@ def build_preview(
     lab="",
     place="",
 ):
-    preview = []
+    """
+    변경될 파일명 미리보기 생성.
+
+    v1.1 perf:
+    - 반복문 안에서 자주 쓰는 값은 지역 변수로 고정
+    - append 함수 참조를 지역화해서 작은 비용 절감
+    - 입력 images가 list/tuple이 아니어도 한 번만 리스트화
+    """
+
+    if not isinstance(images, (list, tuple)):
+        images = list(images)
 
     total = len(images)
     digits = 3
-    template = _make_template(
+    resolved_template = _make_template(
         template=template,
         camera=camera,
         film=film,
@@ -79,23 +124,17 @@ def build_preview(
         place=place,
     )
 
-    for index, image in enumerate(images):
-        if reverse:
-            new_number = total - index
-        else:
-            new_number = index + 1
+    preview = []
+    append = preview.append
+    replace_number = resolved_template.replace
 
+    for index, image in enumerate(images):
+        new_number = total - index if reverse else index + 1
         number = f"{new_number:0{digits}d}"
-        base_name = template.replace("{n}", number)
+        base_name = replace_number("{n}", number)
         new_name = f"{base_name}{image.suffix.lower()}"
 
-        preview.append(
-            (
-                image,
-                image.name,
-                new_name,
-            )
-        )
+        append((image, image.name, new_name))
 
     return preview
 
@@ -114,29 +153,17 @@ def rename_images(preview):
     LAST_UNDO = build_undo_list(preview)
 
     temp_files = []
+    append_temp = temp_files.append
 
     # 1차 Rename
     for image, _, new_name in preview:
-
-        temp_path = image.with_name(
-            image.name + ".filmflip_tmp"
-        )
-
+        temp_path = image.with_name(image.name + ".filmflip_tmp")
         image.rename(temp_path)
-
-        temp_files.append(
-            (
-                temp_path,
-                image.name,
-                new_name,
-            )
-        )
+        append_temp((temp_path, image.name, new_name))
 
     # 2차 Rename
     for temp_path, _, new_name in temp_files:
-
         final_path = temp_path.with_name(new_name)
-
         temp_path.rename(final_path)
 
 
@@ -145,18 +172,7 @@ def build_undo_list(preview):
     Undo를 위한 정보 생성
     """
 
-    undo = []
-
-    for image, old_name, new_name in preview:
-
-        undo.append(
-            (
-                new_name,
-                old_name,
-            )
-        )
-
-    return undo
+    return [(new_name, old_name) for _, old_name, new_name in preview]
 
 
 def undo_rename(folder, undo_list):
@@ -165,29 +181,19 @@ def undo_rename(folder, undo_list):
     """
 
     folder = Path(folder)
-
     temp_files = []
+    append_temp = temp_files.append
 
     for current_name, old_name in undo_list:
-
         current_path = folder / current_name
 
         if not current_path.exists():
             continue
 
         temp_path = folder / (current_name + ".filmflip_tmp")
-
         current_path.rename(temp_path)
-
-        temp_files.append(
-            (
-                temp_path,
-                old_name,
-            )
-        )
+        append_temp((temp_path, old_name))
 
     for temp_path, old_name in temp_files:
-
         final_path = folder / old_name
-
         temp_path.rename(final_path)

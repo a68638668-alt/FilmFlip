@@ -1,7 +1,7 @@
 from pathlib import Path
 import sys
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtGui import QPixmap, QIcon, QGuiApplication, QImageReader
 from PySide6.QtWidgets import (
     QWidget,
     QLabel,
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QDialog,
     QSizePolicy,
+    QApplication,
 )
 
 from dragdrop import ImageTable
@@ -25,6 +26,11 @@ from dialog import (
     rename_finished,
     rename_failed,
 )
+
+
+THUMBNAIL_SIZE = QSize(140, 105)
+ROW_HEIGHT = 122
+THUMBNAIL_BATCH_SIZE = 2
 
 
 class ImagePreviewDialog(QDialog):
@@ -152,6 +158,12 @@ class FilmFlipWindow(QWidget):
 
         self.images = []
         self.thumbnail_cache = {}
+        self.thumbnail_queue = []
+        self.thumbnail_generation = 0
+
+        self.thumbnail_timer = QTimer(self)
+        self.thumbnail_timer.setInterval(0)
+        self.thumbnail_timer.timeout.connect(self.process_thumbnail_queue)
 
         layout = QVBoxLayout()
 
@@ -163,7 +175,7 @@ class FilmFlipWindow(QWidget):
             """
         )
 
-        subtitle = QLabel("필름 스캔 파일 역순 정렬")
+        subtitle = QLabel("필름스캔 파일정리 도구")
 
         self.button = QPushButton("📂 폴더 선택")
         self.button.setMinimumHeight(45)
@@ -190,7 +202,7 @@ class FilmFlipWindow(QWidget):
 
         self.table = ImageTable()
         self.table.setColumnWidth(0, 156)
-        self.table.setIconSize(QSize(140, 105))
+        self.table.setIconSize(THUMBNAIL_SIZE)
         self.table.orderChanged.connect(self.sync_order)
         self.table.cellDoubleClicked.connect(self.open_preview_from_row)
         self.table.rowDoubleClicked.connect(self.open_preview_from_row_only)
@@ -211,7 +223,16 @@ class FilmFlipWindow(QWidget):
         self.setLayout(layout)
 
     def load_folder(self, folder):
-        self.images = find_images(folder)
+        self.cancel_thumbnail_loading()
+        self.info.setText("📂 폴더를 읽는 중입니다...")
+        self.set_controls_enabled(False)
+        QApplication.processEvents()
+
+        try:
+            self.images = find_images(folder)
+        finally:
+            self.set_controls_enabled(True)
+
         self.thumbnail_cache = {}
         self.refresh_preview()
 
@@ -226,23 +247,29 @@ class FilmFlipWindow(QWidget):
                 "이미지가 없습니다.",
             )
 
-    def thumbnail_item(self, image):
-        cache_key = str(image)
-        pixmap = self.thumbnail_cache.get(cache_key)
+    def set_controls_enabled(self, enabled):
+        self.button.setEnabled(enabled)
+        self.reverse_button.setEnabled(enabled and len(self.images) > 0)
+        self.rename_button.setEnabled(enabled and len(self.images) > 0)
+        self.undo_button.setEnabled(enabled and self.undo_button.isEnabled())
 
-        if pixmap is None:
-            pixmap = QPixmap(cache_key)
+    def cancel_thumbnail_loading(self):
+        self.thumbnail_generation += 1
+        self.thumbnail_queue = []
 
-            if not pixmap.isNull():
-                pixmap = pixmap.scaled(QSize(140, 105),
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation,
-                )
+        if self.thumbnail_timer.isActive():
+            self.thumbnail_timer.stop()
 
-            self.thumbnail_cache[cache_key] = pixmap
+    def placeholder_thumbnail_item(self, image):
+        item = QTableWidgetItem("로딩 중")
+        item.setData(Qt.UserRole, str(image))
+        return item
 
+    def cached_thumbnail_item(self, image):
         item = QTableWidgetItem()
         item.setData(Qt.UserRole, str(image))
+
+        pixmap = self.thumbnail_cache.get(str(image))
 
         if pixmap is not None and not pixmap.isNull():
             item.setIcon(QIcon(pixmap))
@@ -251,47 +278,154 @@ class FilmFlipWindow(QWidget):
 
         return item
 
+    def make_thumbnail(self, image):
+        cache_key = str(image)
+        pixmap = self.thumbnail_cache.get(cache_key)
+
+        if pixmap is not None:
+            return pixmap
+
+        # v1.1 성능/화질 보정:
+        # QPixmap 원본 전체 로딩 후 FastTransformation으로 줄이면 빠르지만
+        # 작은 썸네일에서 화질이 크게 무너질 수 있다.
+        # QImageReader로 필요한 크기 근처까지 줄여 읽고, 마지막 축소는
+        # SmoothTransformation으로 처리해서 체감 속도와 품질을 같이 잡는다.
+        reader = QImageReader(cache_key)
+        reader.setAutoTransform(True)
+
+        original_size = reader.size()
+        if original_size.isValid():
+            scaled_size = original_size.scaled(
+                THUMBNAIL_SIZE * 2,
+                Qt.KeepAspectRatio,
+            )
+            reader.setScaledSize(scaled_size)
+
+        image_data = reader.read()
+
+        if image_data.isNull():
+            pixmap = QPixmap(cache_key)
+        else:
+            pixmap = QPixmap.fromImage(image_data)
+
+        if not pixmap.isNull():
+            pixmap = pixmap.scaled(
+                THUMBNAIL_SIZE,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+
+        self.thumbnail_cache[cache_key] = pixmap
+        return pixmap
+
+    def start_thumbnail_loading(self):
+        self.cancel_thumbnail_loading()
+
+        generation = self.thumbnail_generation
+        self.thumbnail_queue = [
+            (generation, row, image)
+            for row, image in enumerate(self.images)
+        ]
+
+        if self.thumbnail_queue:
+            self.thumbnail_timer.start()
+
+    def process_thumbnail_queue(self):
+        if not self.thumbnail_queue:
+            self.thumbnail_timer.stop()
+            return
+
+        current_generation = self.thumbnail_generation
+        processed = 0
+
+        while self.thumbnail_queue and processed < THUMBNAIL_BATCH_SIZE:
+            generation, row, image = self.thumbnail_queue.pop(0)
+
+            if generation != current_generation:
+                continue
+
+            if row < 0 or row >= self.table.rowCount():
+                continue
+
+            item = self.table.item(row, 0)
+
+            if item is None:
+                continue
+
+            if item.data(Qt.UserRole) != str(image):
+                continue
+
+            pixmap = self.make_thumbnail(image)
+
+            if pixmap is not None and not pixmap.isNull():
+                item.setText("")
+                item.setIcon(QIcon(pixmap))
+            else:
+                item.setText("이미지")
+
+            self.table.setRowHeight(row, ROW_HEIGHT)
+            processed += 1
+
+        if not self.thumbnail_queue:
+            self.thumbnail_timer.stop()
+
     def refresh_preview(self):
         """
         self.images를 기준으로 테이블을 다시 그린다.
         현재 파일명 컬럼에는 실제 원본 파일 경로를 UserRole에 저장해서
-        드래그 후 순서 동기화가 표시 텍스트와 섞이지 않게 한다.
+        순서 동기화가 표시 텍스트와 섞이지 않게 한다.
+
+        v1.1 성능 개선:
+        - 테이블 텍스트를 먼저 빠르게 표시한다.
+        - 썸네일은 QTimer로 조금씩 나눠 생성해 폴더 열기 체감 멈춤을 줄인다.
+        - 전체 테이블 갱신 중에는 repaint를 잠시 막아 깜빡임과 버벅임을 줄인다.
         """
 
+        self.cancel_thumbnail_loading()
+
         self.table.blockSignals(True)
+        self.table.setUpdatesEnabled(False)
 
-        preview = build_preview(self.images)
-        self.table.setRowCount(len(preview))
+        try:
+            preview = build_preview(self.images)
+            self.table.setRowCount(len(preview))
 
-        for row, (image, old_name, new_name) in enumerate(preview):
-            self.table.setRowHeight(row, 122)
+            for row, (image, old_name, new_name) in enumerate(preview):
+                self.table.setRowHeight(row, ROW_HEIGHT)
 
-            self.table.setItem(
-                row,
-                0,
-                self.thumbnail_item(image),
+                self.table.setItem(
+                    row,
+                    0,
+                    self.placeholder_thumbnail_item(image),
+                )
+
+                old_item = QTableWidgetItem(
+                    f"{row + 1}. {old_name}"
+                )
+                old_item.setData(Qt.UserRole, str(image))
+
+                new_item = QTableWidgetItem(new_name)
+                new_item.setData(Qt.UserRole, str(image))
+
+                self.table.setItem(row, 1, old_item)
+                self.table.setItem(row, 2, new_item)
+
+            self.info.setText(
+                f"📷 {len(preview)}개의 이미지를 찾았습니다."
             )
 
-            old_item = QTableWidgetItem(
-                f"{row + 1}. {old_name}"
-            )
-            old_item.setData(Qt.UserRole, str(image))
+        finally:
+            self.table.setUpdatesEnabled(True)
+            self.table.blockSignals(False)
 
-            new_item = QTableWidgetItem(new_name)
-            new_item.setData(Qt.UserRole, str(image))
+        self.start_thumbnail_loading()
 
-            self.table.setItem(row, 1, old_item)
-            self.table.setItem(row, 2, new_item)
-
-        self.info.setText(
-            f"📷 {len(preview)}개의 이미지를 찾았습니다."
-        )
-
-        self.table.blockSignals(False)
+        if not self.images:
+            self.info.setText("이미지가 없습니다.")
 
     def sync_order(self):
         """
-        테이블에서 사용자가 드래그로 바꾼 행 순서를 self.images에 반영한다.
+        테이블에서 사용자가 바꾼 행 순서를 self.images에 반영한다.
         표시 텍스트가 아니라 Qt.UserRole에 저장한 실제 파일 경로로 매칭한다.
         """
 
@@ -315,15 +449,18 @@ class FilmFlipWindow(QWidget):
 
         if len(new_images) == len(self.images):
             self.images = new_images
-            # 드래그 직후에는 테이블을 다시 그리지 않아 반응속도를 유지한다.
-            for row in range(self.table.rowCount()):
-                self.table.setRowHeight(row,122)
-            for row in range(self.table.rowCount()):
-                self.table.setRowHeight(row,122)
+
+            # 행 이동 직후 전체 테이블을 다시 그리지 않는다.
+            # macOS/Windows 모두에서 드래그/이동 후 줄어드는 행 높이만 복구한다.
+            self.table.setUpdatesEnabled(False)
+            try:
+                for row in range(self.table.rowCount()):
+                    self.table.setRowHeight(row, ROW_HEIGHT)
+            finally:
+                self.table.setUpdatesEnabled(True)
 
     def open_preview_from_row_only(self, row):
         self.open_preview_from_row(row, 0)
-
 
     def open_preview_from_row(self, row, _column):
         if row < 0 or row >= len(self.images):

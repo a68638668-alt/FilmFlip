@@ -2,7 +2,7 @@ from settings import get_data_file
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
     QMessageBox,
     QDialog,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QAbstractItemView,
     QInputDialog,
+    QApplication,
 )
 
 
@@ -62,6 +63,9 @@ DEFAULT_TEMPLATE = {
 }
 
 
+_INVALID_FILENAME_TRANSLATION = str.maketrans("", "", '/\\:*?"<>|')
+
+
 def _safe_component(text):
     """
     파일명에 쓰기 어려운 문자만 정리한다.
@@ -69,12 +73,53 @@ def _safe_component(text):
     - 경로 구분자/금지 문자 제거
     - 내부 공백은 사용자가 의도한 값일 수 있어 그대로 둔다
     """
-    text = (text or "").strip()
+    return (text or "").strip().translate(_INVALID_FILENAME_TRANSLATION).strip()
 
-    for char in ['/', '\\', ':', '*', '?', '"', '<', '>', '|']:
-        text = text.replace(char, "")
 
-    return text.strip()
+
+
+class KoreanAwareLineEdit(QLineEdit):
+    """
+    macOS/Windows 한글 IME 조합 중인 마지막 글자를 미리보기에 반영하기 위한 입력창.
+    QLineEdit.text()는 조합 중인 글자를 아직 확정 텍스트로 돌려주지 않을 수 있어서,
+    inputMethodEvent의 preedit 문자열을 잠시 보관해 미리보기 계산에만 사용한다.
+    """
+
+    composingTextChanged = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._preedit_text = ""
+
+    def inputMethodEvent(self, event):
+        self._preedit_text = event.preeditString() or ""
+        super().inputMethodEvent(event)
+        self.composingTextChanged.emit()
+        QTimer.singleShot(0, self.composingTextChanged.emit)
+        QTimer.singleShot(30, self.composingTextChanged.emit)
+
+    def keyReleaseEvent(self, event):
+        super().keyReleaseEvent(event)
+        QTimer.singleShot(0, self.composingTextChanged.emit)
+
+    def focusOutEvent(self, event):
+        self._preedit_text = ""
+        super().focusOutEvent(event)
+        self.composingTextChanged.emit()
+
+    def composed_text(self):
+        base = self.text()
+        preedit = self._preedit_text
+
+        if not preedit:
+            return base
+
+        # Qt가 환경에 따라 preedit까지 text()에 포함해 돌려주는 경우가 있어 중복을 피한다.
+        if base.endswith(preedit) or preedit in base:
+            return base
+
+        cursor = max(0, min(self.cursorPosition(), len(base)))
+        return base[:cursor] + preedit + base[cursor:]
 
 
 def _normalize_entry(entry):
@@ -216,7 +261,16 @@ class PresetEditDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def accept(self):
+        # 한글 IME 조합 중인 마지막 글자가 저장에서 빠지는 경우를 줄이기 위해
+        # 확인 버튼 처리 전에 입력 포커스를 먼저 정리한다.
+        self.value_edit.clearFocus()
+        QApplication.processEvents()
+        super().accept()
+
     def values(self):
+        self.value_edit.clearFocus()
+        QApplication.processEvents()
         value = _safe_component(self.value_edit.text())
 
         return {
@@ -256,14 +310,21 @@ class PresetManageDialog(QDialog):
         add_button = QPushButton("＋ 추가")
         edit_button = QPushButton("✏ 수정")
         delete_button = QPushButton("🗑 삭제")
+        up_button = QPushButton("▲ 위로")
+        down_button = QPushButton("▼ 아래로")
 
         add_button.clicked.connect(self.add_item)
         edit_button.clicked.connect(self.edit_item)
         delete_button.clicked.connect(self.delete_item)
+        up_button.clicked.connect(self.move_item_up)
+        down_button.clicked.connect(self.move_item_down)
 
         button_row.addWidget(add_button)
         button_row.addWidget(edit_button)
         button_row.addWidget(delete_button)
+        button_row.addStretch()
+        button_row.addWidget(up_button)
+        button_row.addWidget(down_button)
 
         layout.addLayout(button_row)
 
@@ -335,6 +396,26 @@ class PresetManageDialog(QDialog):
         if self.items:
             self.list_widget.setCurrentRow(min(row, len(self.items) - 1))
 
+    def move_item_up(self):
+        row = self.list_widget.currentRow()
+
+        if row <= 0:
+            return
+
+        self.items[row - 1], self.items[row] = self.items[row], self.items[row - 1]
+        self.refresh_list()
+        self.list_widget.setCurrentRow(row - 1)
+
+    def move_item_down(self):
+        row = self.list_widget.currentRow()
+
+        if row < 0 or row >= len(self.items) - 1:
+            return
+
+        self.items[row + 1], self.items[row] = self.items[row], self.items[row + 1]
+        self.refresh_list()
+        self.list_widget.setCurrentRow(row + 1)
+
     def selected_entry(self):
         row = self.list_widget.currentRow()
 
@@ -348,6 +429,173 @@ class PresetManageDialog(QDialog):
 
     def values(self):
         return [dict(item) for item in self.items]
+
+
+class ShootingPresetManageDialog(QDialog):
+    def __init__(self, presets, parent=None):
+        super().__init__(parent)
+
+        self.setWindowTitle("촬영 프리셋 관리")
+        self.setMinimumWidth(460)
+        self.presets = [dict(preset) for preset in presets]
+
+        layout = QVBoxLayout(self)
+
+        guide = QLabel("저장된 촬영 프리셋을 선택한 뒤 ▲/▼ 버튼으로 순서를 바꿀 수 있습니다.")
+        layout.addWidget(guide)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.list_widget.setAlternatingRowColors(True)
+        layout.addWidget(self.list_widget)
+
+        button_row = QHBoxLayout()
+
+        up_button = QPushButton("▲ 위로")
+        down_button = QPushButton("▼ 아래로")
+        rename_button = QPushButton("✏ 이름 수정")
+        delete_button = QPushButton("🗑 삭제")
+
+        up_button.clicked.connect(self.move_current_up)
+        down_button.clicked.connect(self.move_current_down)
+        rename_button.clicked.connect(self.rename_current)
+        delete_button.clicked.connect(self.delete_current)
+
+        button_row.addWidget(up_button)
+        button_row.addWidget(down_button)
+        button_row.addStretch()
+        button_row.addWidget(rename_button)
+        button_row.addWidget(delete_button)
+
+        layout.addLayout(button_row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.refresh_list()
+
+    def _preset_label(self, preset):
+        # 관리창 목록에는 사용자가 저장한 프리셋 이름만 보여준다.
+        # 카메라/필름/현상소 값까지 같이 보여주면 같은 문구가 반복되어 지저분해 보인다.
+        return preset.get("name", "") or "이름 없음"
+
+    def _preset_detail(self, preset):
+        parts = [
+            preset.get("camera", ""),
+            preset.get("film", ""),
+            preset.get("lab", ""),
+        ]
+        parts = [part for part in parts if part]
+        return " / ".join(parts)
+
+    def refresh_list(self):
+        current_row = self.list_widget.currentRow()
+        self.list_widget.clear()
+
+        for preset in self.presets:
+            item = QListWidgetItem(self._preset_label(preset))
+            detail = self._preset_detail(preset)
+            if detail:
+                item.setToolTip(detail)
+            item.setData(Qt.UserRole, dict(preset))
+            self.list_widget.addItem(item)
+
+        if self.presets:
+            self.list_widget.setCurrentRow(min(max(current_row, 0), len(self.presets) - 1))
+
+    def move_current_up(self):
+        row = self.list_widget.currentRow()
+
+        if row <= 0:
+            return
+
+        self.presets[row - 1], self.presets[row] = self.presets[row], self.presets[row - 1]
+        self.refresh_list()
+        self.list_widget.setCurrentRow(row - 1)
+
+    def move_current_down(self):
+        row = self.list_widget.currentRow()
+
+        if row < 0 or row >= len(self.presets) - 1:
+            return
+
+        self.presets[row + 1], self.presets[row] = self.presets[row], self.presets[row + 1]
+        self.refresh_list()
+        self.list_widget.setCurrentRow(row + 1)
+
+    def rename_current(self):
+        row = self.list_widget.currentRow()
+
+        if row < 0:
+            return
+
+        current = self.presets[row]
+        name, ok = QInputDialog.getText(
+            self,
+            "촬영 프리셋 이름 수정",
+            "프리셋 이름",
+            text=current.get("name", ""),
+        )
+
+        if not ok:
+            return
+
+        name = _safe_component(name)
+
+        if not name:
+            return
+
+        duplicated = any(
+            index != row and preset.get("name", "") == name
+            for index, preset in enumerate(self.presets)
+        )
+
+        if duplicated:
+            QMessageBox.warning(
+                self,
+                "FilmFlip",
+                f"'{name}' 프리셋이 이미 있습니다.",
+            )
+            return
+
+        self.presets[row] = dict(current)
+        self.presets[row]["name"] = name
+        self.refresh_list()
+        self.list_widget.setCurrentRow(row)
+
+    def delete_current(self):
+        row = self.list_widget.currentRow()
+
+        if row < 0:
+            return
+
+        preset = self.presets[row]
+        reply = QMessageBox.question(
+            self,
+            "FilmFlip",
+            f"'{preset.get('name', '')}' 프리셋을 삭제할까요?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        del self.presets[row]
+        self.refresh_list()
+
+    def selected_name(self):
+        row = self.list_widget.currentRow()
+
+        if 0 <= row < len(self.presets):
+            return self.presets[row].get("name", "")
+
+        return ""
+
+    def values(self):
+        return [dict(preset) for preset in self.presets]
 
 
 class TemplateListWidget(QListWidget):
@@ -396,6 +644,12 @@ class RenameDialog(QDialog):
         self.shooting_presets = load_shooting_presets()
         self.template_settings = load_template_settings()
 
+        # 프리셋 적용/체크 변경 중 미리보기가 여러 번 연속 갱신되면
+        # 이름 변경 창을 열 때와 입력할 때 체감 반응이 느려질 수 있다.
+        # 짧게 묶어서 한 번만 갱신한다.
+        self._preview_update_pending = False
+        self._preview_updates_suspended = 0
+
         layout = QVBoxLayout(self)
 
         description = QLabel(
@@ -414,20 +668,29 @@ class RenameDialog(QDialog):
         self.add_shooting_button = QPushButton("＋")
         self.edit_shooting_button = QPushButton("✏")
         self.delete_shooting_button = QPushButton("🗑")
+        self.manage_shooting_button = QPushButton("⚙")
 
         self.add_shooting_button.setFixedWidth(42)
         self.edit_shooting_button.setFixedWidth(42)
         self.delete_shooting_button.setFixedWidth(42)
+        self.manage_shooting_button.setFixedWidth(42)
+
+        self.add_shooting_button.setToolTip("촬영 프리셋 추가")
+        self.edit_shooting_button.setToolTip("선택한 촬영 프리셋 수정")
+        self.delete_shooting_button.setToolTip("선택한 촬영 프리셋 삭제")
+        self.manage_shooting_button.setToolTip("촬영 프리셋 순서 관리")
 
         self.shooting_combo.currentIndexChanged.connect(self.apply_shooting_preset)
         self.add_shooting_button.clicked.connect(self.add_shooting_preset)
         self.edit_shooting_button.clicked.connect(self.edit_shooting_preset)
         self.delete_shooting_button.clicked.connect(self.delete_shooting_preset)
+        self.manage_shooting_button.clicked.connect(self.manage_shooting_presets)
 
         preset_layout.addWidget(self.shooting_combo)
         preset_layout.addWidget(self.add_shooting_button)
         preset_layout.addWidget(self.edit_shooting_button)
         preset_layout.addWidget(self.delete_shooting_button)
+        preset_layout.addWidget(self.manage_shooting_button)
 
         layout.addWidget(preset_group)
 
@@ -494,12 +757,14 @@ class RenameDialog(QDialog):
             self.lab_combo,
             self.place_combo,
         ]:
-            combo.currentIndexChanged.connect(self.update_preview)
-            combo.lineEdit().textChanged.connect(self.update_preview)
+            combo.currentIndexChanged.connect(self.request_update_preview)
+            combo.lineEdit().textChanged.connect(self.request_update_preview)
+            if hasattr(combo.lineEdit(), "composingTextChanged"):
+                combo.lineEdit().composingTextChanged.connect(self.request_update_preview)
 
-        self.reverse_radio.toggled.connect(self.update_preview)
-        self.template_list.itemChanged.connect(self.update_preview)
-        self.template_list.orderChanged.connect(self.update_preview)
+        self.reverse_radio.toggled.connect(self.request_update_preview)
+        self.template_list.itemChanged.connect(self.request_update_preview)
+        self.template_list.orderChanged.connect(self.request_update_preview)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
@@ -510,6 +775,25 @@ class RenameDialog(QDialog):
         layout.addWidget(buttons)
 
         self.update_preview()
+
+    def _suspend_preview_updates(self):
+        self._preview_updates_suspended += 1
+
+    def _resume_preview_updates(self, update=True):
+        self._preview_updates_suspended = max(0, self._preview_updates_suspended - 1)
+
+        if update:
+            self.request_update_preview()
+
+    def request_update_preview(self, *args):
+        if self._preview_updates_suspended:
+            return
+
+        if self._preview_update_pending:
+            return
+
+        self._preview_update_pending = True
+        QTimer.singleShot(0, self.update_preview)
 
     def _reload_shooting_presets(self, keep_name=""):
         self.shooting_combo.blockSignals(True)
@@ -528,14 +812,18 @@ class RenameDialog(QDialog):
         self.shooting_combo.blockSignals(False)
 
     def _set_combo_text(self, combo, value):
+        combo.blockSignals(True)
         combo.setCurrentText(value or "")
+        combo.blockSignals(False)
 
     def set_template_enabled(self, key, enabled):
         for row in range(self.template_list.count()):
             item = self.template_list.item(row)
 
             if item.data(Qt.UserRole) == key:
+                self.template_list.blockSignals(True)
                 item.setCheckState(Qt.Checked if enabled else Qt.Unchecked)
+                self.template_list.blockSignals(False)
                 return
 
     def apply_shooting_preset(self):
@@ -544,20 +832,26 @@ class RenameDialog(QDialog):
         if not preset:
             return
 
-        self._set_combo_text(self.camera_combo, preset.get("camera", ""))
-        self._set_combo_text(self.film_combo, preset.get("film", ""))
-        self._set_combo_text(self.lab_combo, preset.get("lab", ""))
+        self._suspend_preview_updates()
 
-        # 프리셋에 값이 있는 항목은 파일명 구성에서 자동 체크
-        self.set_template_enabled("camera", bool(preset.get("camera")))
-        self.set_template_enabled("film", bool(preset.get("film")))
-        self.set_template_enabled("lab", bool(preset.get("lab")))
-        self.set_template_enabled("number", True)
+        try:
+            self._set_combo_text(self.camera_combo, preset.get("camera", ""))
+            self._set_combo_text(self.film_combo, preset.get("film", ""))
+            self._set_combo_text(self.lab_combo, preset.get("lab", ""))
 
-        # 장소는 촬영마다 달라지는 값이라 프리셋에서 건드리지 않는다.
-        self.update_preview()
+            # 프리셋에 값이 있는 항목은 파일명 구성에서 자동 체크
+            self.set_template_enabled("camera", bool(preset.get("camera")))
+            self.set_template_enabled("film", bool(preset.get("film")))
+            self.set_template_enabled("lab", bool(preset.get("lab")))
+            self.set_template_enabled("number", True)
+        finally:
+            # 장소는 촬영마다 달라지는 값이라 프리셋에서 건드리지 않는다.
+            self._resume_preview_updates(update=True)
 
     def _current_shooting_values(self):
+        for combo in (self.camera_combo, self.film_combo, self.lab_combo):
+            self._commit_pending_combo_text(combo)
+
         return {
             "camera": self._combo_filename(self.camera_combo),
             "film": self._combo_filename(self.film_combo),
@@ -729,10 +1023,67 @@ class RenameDialog(QDialog):
         self._reload_shooting_presets()
         self.update_preview()
 
+    def manage_shooting_presets(self):
+        current_name = ""
+        current_preset = self.shooting_combo.currentData()
+
+        if current_preset:
+            current_name = current_preset.get("name", "")
+
+        dialog = ShootingPresetManageDialog(self.shooting_presets, self)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        selected_name = dialog.selected_name() or current_name
+        self.shooting_presets = dialog.values()
+        save_shooting_presets(self.shooting_presets)
+        self._reload_shooting_presets(selected_name)
+        self.apply_shooting_preset()
+        self.update_preview()
+
+    def move_shooting_preset_up(self):
+        index = self.shooting_combo.currentIndex()
+
+        if index <= 1:
+            return
+
+        preset_index = index - 1
+        preset = self.shooting_presets[preset_index]
+
+        self.shooting_presets[preset_index - 1], self.shooting_presets[preset_index] = (
+            self.shooting_presets[preset_index],
+            self.shooting_presets[preset_index - 1],
+        )
+
+        save_shooting_presets(self.shooting_presets)
+        self._reload_shooting_presets(preset.get("name", ""))
+
+    def move_shooting_preset_down(self):
+        index = self.shooting_combo.currentIndex()
+
+        if index <= 0:
+            return
+
+        preset_index = index - 1
+
+        if preset_index >= len(self.shooting_presets) - 1:
+            return
+
+        preset = self.shooting_presets[preset_index]
+
+        self.shooting_presets[preset_index + 1], self.shooting_presets[preset_index] = (
+            self.shooting_presets[preset_index],
+            self.shooting_presets[preset_index + 1],
+        )
+
+        save_shooting_presets(self.shooting_presets)
+        self._reload_shooting_presets(preset.get("name", ""))
 
     def _create_combo(self, key):
         combo = QComboBox()
         combo.setEditable(True)
+        combo.setLineEdit(KoreanAwareLineEdit())
         combo.setInsertPolicy(QComboBox.NoInsert)
         combo.lineEdit().setPlaceholderText(f"{PRESET_KEYS[key]} 선택 또는 직접 입력")
         self._reload_combo(combo, key)
@@ -836,8 +1187,26 @@ class RenameDialog(QDialog):
             "enabled": enabled,
         }
 
+    def _commit_pending_combo_text(self, combo):
+        line_edit = combo.lineEdit() if combo and combo.isEditable() else None
+        if line_edit:
+            # macOS/Windows 한글 IME에서 마지막 조합 글자가 currentText에 늦게 반영되는 경우 방지
+            line_edit.clearFocus()
+            QApplication.processEvents()
+
+    def _combo_text(self, combo):
+        if combo and combo.isEditable() and combo.lineEdit():
+            # macOS/Windows 한글 IME에서 마지막 글자가 아직 조합 중이면
+            # QLineEdit.text()에 포함되지 않을 수 있어 preedit 문자열까지 반영한다.
+            line_edit = combo.lineEdit()
+            if hasattr(line_edit, "composed_text"):
+                return line_edit.composed_text()
+            return line_edit.text()
+
+        return combo.currentText() if combo else ""
+
     def _combo_filename(self, combo):
-        text = _safe_component(combo.currentText())
+        text = _safe_component(self._combo_text(combo))
 
         if not text:
             return ""
@@ -879,17 +1248,23 @@ class RenameDialog(QDialog):
         return "_".join(parts)
 
     def update_preview(self):
+        self._preview_update_pending = False
+
         template = self._template()
         nums = ["003", "002", "001"] if self.reverse_radio.isChecked() else ["001", "002", "003"]
 
-        self.example.setText(
-            "미리보기\n" + "\n".join(
-                template.replace("{n}", number) + ".jpg"
-                for number in nums
-            )
+        preview_text = "미리보기\n" + "\n".join(
+            template.replace("{n}", number) + ".jpg"
+            for number in nums
         )
 
+        if self.example.text() != preview_text:
+            self.example.setText(preview_text)
+
     def values(self):
+        for combo in (self.camera_combo, self.film_combo, self.lab_combo, self.place_combo):
+            self._commit_pending_combo_text(combo)
+
         components = self._components_map()
         settings = self._current_template_settings()
 
