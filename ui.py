@@ -190,7 +190,7 @@ class FilmFlipWindow(QWidget):
 
         self.settings = load_settings()
 
-        self.setWindowTitle("🎞 FilmFlip v1.2-dev")
+        self.setWindowTitle("🎞 FilmFlip v1.2")
         self.resize(900, 650)
         self.setAcceptDrops(True)
 
