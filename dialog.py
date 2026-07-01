@@ -1,5 +1,6 @@
 from settings import get_data_file
 import json
+import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QTimer
@@ -84,6 +85,8 @@ DEFAULT_TEMPLATE = {
 
 
 _INVALID_FILENAME_TRANSLATION = str.maketrans("", "", '/\\:*?"<>|')
+_DATE_PATTERN = re.compile(r"^(\d{4})[-./]?(\d{2})[-./]?(\d{2})$")
+_WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
 def _safe_component(text):
@@ -96,6 +99,25 @@ def _safe_component(text):
     return (text or "").strip().translate(_INVALID_FILENAME_TRANSLATION).strip()
 
 
+def _normalize_date(text):
+    """날짜 입력값을 YYYYMMDD 파일명 형태로 정리한다."""
+    text = _safe_component(text)
+
+    if not text:
+        return ""
+
+    match = _DATE_PATTERN.match(text)
+    if not match:
+        return text
+
+    year, month, day = match.groups()
+    return f"{year}{month}{day}"
+
+
+def _normalize_memo(text):
+    """메모는 파일명에서 공백 없이 붙여 쓴다."""
+    text = _safe_component(text)
+    return _WHITESPACE_PATTERN.sub("", text)
 
 
 class KoreanAwareLineEdit(QLineEdit):
@@ -564,6 +586,8 @@ class ShootingPresetManageDialog(QDialog):
             preset.get("camera", ""),
             preset.get("film", ""),
             preset.get("lab", ""),
+            preset.get("place", ""),
+            preset.get("scanner", ""),
         ]
         parts = [part for part in parts if part]
         return " / ".join(parts)
@@ -772,8 +796,8 @@ class RenameDialog(QDialog):
             button.setMinimumWidth(58)
             button.setMaximumWidth(78)
 
-        self.add_shooting_button.setToolTip("현재 카메라/필름/현상소 값을 새 촬영 프리셋으로 저장")
-        self.edit_shooting_button.setToolTip("선택한 촬영 프리셋을 현재 입력값으로 수정")
+        self.add_shooting_button.setToolTip("현재 카메라/필름/현상소/장소/스캐너 값을 새 촬영 프리셋으로 저장")
+        self.edit_shooting_button.setToolTip("선택한 촬영 프리셋을 현재 카메라/필름/현상소/장소/스캐너 값으로 수정")
         self.delete_shooting_button.setToolTip("선택한 촬영 프리셋 삭제")
         self.manage_shooting_button.setToolTip("촬영 프리셋 목록 편집 및 순서 변경")
 
@@ -1021,24 +1045,29 @@ class RenameDialog(QDialog):
             self._set_combo_text(self.camera_combo, preset.get("camera", ""))
             self._set_combo_text(self.film_combo, preset.get("film", ""))
             self._set_combo_text(self.lab_combo, preset.get("lab", ""))
+            self._set_combo_text(self.place_combo, preset.get("place", ""))
+            self._set_combo_text(self.scanner_combo, preset.get("scanner", ""))
 
             # 프리셋에 값이 있는 항목은 파일명 구성에서 자동 체크
             self.set_template_enabled("camera", bool(preset.get("camera")))
             self.set_template_enabled("film", bool(preset.get("film")))
             self.set_template_enabled("lab", bool(preset.get("lab")))
+            self.set_template_enabled("place", bool(preset.get("place")))
+            self.set_template_enabled("scanner", bool(preset.get("scanner")))
             self.set_template_enabled("number", True)
         finally:
-            # 장소는 촬영마다 달라지는 값이라 프리셋에서 건드리지 않는다.
             self._resume_preview_updates(update=True)
 
     def _current_shooting_values(self):
-        for combo in (self.camera_combo, self.film_combo, self.lab_combo):
+        for combo in (self.camera_combo, self.film_combo, self.lab_combo, self.place_combo, self.scanner_combo):
             self._commit_pending_combo_text(combo)
 
         return {
             "camera": self._combo_filename(self.camera_combo),
             "film": self._combo_filename(self.film_combo),
             "lab": self._combo_filename(self.lab_combo),
+            "place": self._combo_filename(self.place_combo),
+            "scanner": self._combo_filename(self.scanner_combo),
         }
 
     def _default_shooting_name(self):
@@ -1047,6 +1076,8 @@ class RenameDialog(QDialog):
             values["camera"],
             values["film"],
             values["lab"],
+            values["place"],
+            values["scanner"],
         ]
         parts = [part for part in parts if part]
         return " + ".join(parts) if parts else "새 촬영 프리셋"
@@ -1058,7 +1089,7 @@ class RenameDialog(QDialog):
             QMessageBox.information(
                 self,
                 "FilmFlip",
-                "카메라, 필름, 현상소 중 하나 이상을 먼저 선택해주세요.",
+                "카메라, 필름, 현상소, 장소, 스캐너 중 하나 이상을 먼저 선택해주세요.",
             )
             return
 
@@ -1102,6 +1133,8 @@ class RenameDialog(QDialog):
                 "camera": values["camera"],
                 "film": values["film"],
                 "lab": values["lab"],
+                "place": values["place"],
+                "scanner": values["scanner"],
             }
             save_shooting_presets(self.shooting_presets)
             self._reload_shooting_presets(name)
@@ -1114,6 +1147,8 @@ class RenameDialog(QDialog):
             "camera": values["camera"],
             "film": values["film"],
             "lab": values["lab"],
+            "place": values["place"],
+            "scanner": values["scanner"],
         }
 
         self.shooting_presets.append(preset)
@@ -1171,6 +1206,8 @@ class RenameDialog(QDialog):
             "camera": values["camera"],
             "film": values["film"],
             "lab": values["lab"],
+            "place": values["place"],
+            "scanner": values["scanner"],
         }
 
         self.shooting_presets[index - 1] = new_preset
@@ -1415,13 +1452,13 @@ class RenameDialog(QDialog):
 
     def _components_map(self):
         return {
-            "date": self._line_filename(self.date_edit),
+            "date": _normalize_date(self._line_filename(self.date_edit)),
             "camera": self._combo_filename(self.camera_combo),
             "film": self._combo_filename(self.film_combo),
             "lab": self._combo_filename(self.lab_combo),
             "place": self._combo_filename(self.place_combo),
             "scanner": self._combo_filename(self.scanner_combo),
-            "memo": self._line_filename(self.memo_edit),
+            "memo": _normalize_memo(self._line_filename(self.memo_edit)),
             "number": "{n}",
         }
 

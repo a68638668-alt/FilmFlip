@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 IMAGE_EXTENSIONS = {
@@ -23,6 +24,9 @@ _INVALID_FILENAME_CHARS = str.maketrans({
     ">": "",
     "|": "",
 })
+
+_DATE_PATTERN = re.compile(r"^(\d{4})[-./]?(\d{2})[-./]?(\d{2})$")
+_WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
 def find_images(folder):
@@ -71,21 +75,52 @@ def _safe_component(text):
     return text.translate(_INVALID_FILENAME_CHARS).strip()
 
 
+def _normalize_date(text):
+    """
+    날짜 입력값을 파일명용 YYYYMMDD 형태로 정리한다.
+    지원 예: 2026-07-01, 2026.07.01, 2026/07/01, 20260701
+    """
+
+    text = _safe_component(text)
+    if not text:
+        return ""
+
+    match = _DATE_PATTERN.match(text)
+    if not match:
+        return text
+
+    year, month, day = match.groups()
+    return f"{year}{month}{day}"
+
+
+def _normalize_memo(text):
+    """메모는 파일명에서 공백 없이 붙여 쓴다."""
+
+    text = _safe_component(text)
+    return _WHITESPACE_PATTERN.sub("", text)
+
+
 def _make_template(
     template=None,
+    date="",
     camera="",
     film="",
     lab="",
     place="",
+    scanner="",
+    memo="",
 ):
     if template:
         return template
 
     parts = [
+        _normalize_date(date),
         _safe_component(camera),
         _safe_component(film),
         _safe_component(lab),
         _safe_component(place),
+        _safe_component(scanner),
+        _normalize_memo(memo),
     ]
     parts = [part for part in parts if part]
     parts.append("{n}")
@@ -97,13 +132,21 @@ def build_preview(
     images,
     template="{n}",
     reverse=True,
+    date="",
     camera="",
     film="",
     lab="",
     place="",
+    scanner="",
+    memo="",
 ):
     """
     변경될 파일명 미리보기 생성.
+
+    v1.2:
+    - date / scanner / memo 파일명 구성 지원
+    - date는 YYYYMMDD로 정규화
+    - memo는 공백 제거
 
     v1.1 perf:
     - 반복문 안에서 자주 쓰는 값은 지역 변수로 고정
@@ -118,10 +161,13 @@ def build_preview(
     digits = 3
     resolved_template = _make_template(
         template=template,
+        date=date,
         camera=camera,
         film=film,
         lab=lab,
         place=place,
+        scanner=scanner,
+        memo=memo,
     )
 
     preview = []
