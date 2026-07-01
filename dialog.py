@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QApplication,
     QSizePolicy,
+    QPlainTextEdit,
 )
 
 
@@ -145,8 +146,12 @@ class KoreanAwareLineEdit(QLineEdit):
         if not preedit:
             return base
 
-        # Qt가 환경에 따라 preedit까지 text()에 포함해 돌려주는 경우가 있어 중복을 피한다.
-        if base.endswith(preedit) or preedit in base:
+        # Qt가 환경에 따라 preedit까지 text()에 포함해 돌려주는 경우가 있다.
+        # 기존에는 `preedit in base`까지 중복 처리했는데, 이 조건 때문에
+        # "아침스냅아침"처럼 같은 한글 조각을 반복 입력할 때 뒤쪽 조합 문자가
+        # 미리보기에서 빠지는 문제가 생겼다.
+        # 따라서 현재 확정 텍스트의 끝이 조합 문자열과 완전히 같을 때만 중복으로 본다.
+        if base.endswith(preedit):
             return base
 
         cursor = max(0, min(self.cursorPosition(), len(base)))
@@ -910,8 +915,14 @@ class RenameDialog(QDialog):
         layout.addWidget(self.normal_radio)
         layout.addWidget(self.reverse_radio)
 
-        self.example = QLabel()
-        self.example.setMinimumHeight(70)
+        self.example = QPlainTextEdit()
+        self.example.setReadOnly(True)
+        self.example.setMinimumHeight(88)
+        self.example.setMaximumHeight(110)
+        self.example.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.example.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.example.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.example.setPlaceholderText("미리보기")
         layout.addWidget(self.example)
 
         for combo in [
@@ -1480,8 +1491,8 @@ class RenameDialog(QDialog):
             for number in nums
         )
 
-        if self.example.text() != preview_text:
-            self.example.setText(preview_text)
+        if self.example.toPlainText() != preview_text:
+            self.example.setPlainText(preview_text)
 
     def values(self):
         for combo in (self.camera_combo, self.film_combo, self.lab_combo, self.place_combo, self.scanner_combo):
