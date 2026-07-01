@@ -25,7 +25,6 @@ _INVALID_FILENAME_CHARS = str.maketrans({
     "|": "",
 })
 
-_DATE_PATTERN = re.compile(r"^(\d{4})[-./]?(\d{2})[-./]?(\d{2})$")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
@@ -77,20 +76,12 @@ def _safe_component(text):
 
 def _normalize_date(text):
     """
-    날짜 입력값을 파일명용 YYYYMMDD 형태로 정리한다.
-    지원 예: 2026-07-01, 2026.07.01, 2026/07/01, 20260701
+    날짜 입력값은 사용자가 적은 형태를 최대한 유지한다.
+    예: 2026-07-01, 2026.07.01, 20260701 모두 그대로 사용
+    단, 파일명에서 문제가 되는 문자(/ 등)는 _safe_component에서 제거된다.
     """
 
-    text = _safe_component(text)
-    if not text:
-        return ""
-
-    match = _DATE_PATTERN.match(text)
-    if not match:
-        return text
-
-    year, month, day = match.groups()
-    return f"{year}{month}{day}"
+    return _safe_component(text)
 
 
 def _normalize_memo(text):
@@ -145,7 +136,7 @@ def build_preview(
 
     v1.2:
     - date / scanner / memo 파일명 구성 지원
-    - date는 YYYYMMDD로 정규화
+    - date는 사용자가 입력한 형태를 최대한 유지
     - memo는 공백 제거
 
     v1.1 perf:

@@ -85,7 +85,6 @@ DEFAULT_TEMPLATE = {
 
 
 _INVALID_FILENAME_TRANSLATION = str.maketrans("", "", '/\\:*?"<>|')
-_DATE_PATTERN = re.compile(r"^(\d{4})[-./]?(\d{2})[-./]?(\d{2})$")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
@@ -100,18 +99,8 @@ def _safe_component(text):
 
 
 def _normalize_date(text):
-    """날짜 입력값을 YYYYMMDD 파일명 형태로 정리한다."""
-    text = _safe_component(text)
-
-    if not text:
-        return ""
-
-    match = _DATE_PATTERN.match(text)
-    if not match:
-        return text
-
-    year, month, day = match.groups()
-    return f"{year}{month}{day}"
+    """날짜 입력값은 사용자가 적은 형태를 최대한 유지한다."""
+    return _safe_component(text)
 
 
 def _normalize_memo(text):
@@ -850,7 +839,7 @@ class RenameDialog(QDialog):
         additional_grid.setVerticalSpacing(12)
 
         self.date_edit = KoreanAwareLineEdit()
-        self.date_edit.setPlaceholderText("예: 2026-07-01, 20260701, 260701")
+        self.date_edit.setPlaceholderText("예: 2026-07-01, 20260701, 2026.07.01")
 
         self.scanner_combo = self._create_combo("scanner")
 
