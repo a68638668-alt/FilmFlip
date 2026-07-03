@@ -371,6 +371,44 @@ class FilmFlipWindow(QWidget):
         finally:
             self.table.setUpdatesEnabled(True)
 
+    def update_thumbnail_icons_for_current_size(self):
+        """
+        썸네일 크기 변경 시 테이블 전체를 다시 만들지 않고
+        현재 행의 아이콘만 교체한다.
+        캐시에 없는 썸네일은 QTimer 큐에서 뒤이어 생성된다.
+        """
+
+        self.table.blockSignals(True)
+        self.table.setUpdatesEnabled(False)
+
+        try:
+            for row, image in enumerate(self.images):
+                if row >= self.table.rowCount():
+                    break
+
+                self.table.setRowHeight(row, self.row_height)
+                item = self.table.item(row, 0)
+
+                if item is None:
+                    item = self.placeholder_thumbnail_item(image)
+                    self.table.setItem(row, 0, item)
+
+                item.setData(Qt.UserRole, str(image))
+                pixmap = self.thumbnail_cache.get(
+                    self.thumbnail_cache_key(image)
+                )
+
+                if pixmap is not None and not pixmap.isNull():
+                    item.setText("")
+                    item.setIcon(QIcon(pixmap))
+                else:
+                    item.setIcon(QIcon())
+                    item.setText("로딩 중")
+                    item.setTextAlignment(Qt.AlignCenter)
+        finally:
+            self.table.setUpdatesEnabled(True)
+            self.table.blockSignals(False)
+
     def change_thumbnail_preset(self, _index):
         preset_key = self.thumbnail_combo.currentData()
         if not preset_key or preset_key == self.thumbnail_preset_key:
@@ -380,7 +418,8 @@ class FilmFlipWindow(QWidget):
         self.apply_thumbnail_table_settings()
 
         if self.images:
-            self.refresh_preview()
+            self.update_thumbnail_icons_for_current_size()
+            self.restart_thumbnail_loading_for_current_size()
 
     def update_status_bar(self):
         if self.current_folder is None:
@@ -484,29 +523,37 @@ class FilmFlipWindow(QWidget):
 
         return item
 
-    def thumbnail_cache_key(self, image):
-        return f"{self.thumbnail_size.width()}x{self.thumbnail_size.height()}:{image}"
+    def thumbnail_size_for_preset(self, preset_key=None):
+        preset_key = preset_key or self.thumbnail_preset_key
+        preset = THUMBNAIL_PRESETS.get(
+            preset_key,
+            THUMBNAIL_PRESETS[DEFAULT_THUMBNAIL_PRESET],
+        )
+        return preset["size"]
 
-    def make_thumbnail(self, image):
+    def thumbnail_cache_key(self, image, preset_key=None):
+        size = self.thumbnail_size_for_preset(preset_key)
+        return f"{size.width()}x{size.height()}:{image}"
+
+    def make_thumbnail(self, image, preset_key=None):
         image_path = str(image)
-        cache_key = self.thumbnail_cache_key(image)
+        target_size = self.thumbnail_size_for_preset(preset_key)
+        cache_key = self.thumbnail_cache_key(image, preset_key)
         pixmap = self.thumbnail_cache.get(cache_key)
 
         if pixmap is not None:
             return pixmap
 
-        # v1.1 성능/화질 보정:
-        # QPixmap 원본 전체 로딩 후 FastTransformation으로 줄이면 빠르지만
-        # 작은 썸네일에서 화질이 크게 무너질 수 있다.
-        # QImageReader로 필요한 크기 근처까지 줄여 읽고, 마지막 축소는
-        # SmoothTransformation으로 처리해서 체감 속도와 품질을 같이 잡는다.
+        # v1.2.1 성능 개선:
+        # 썸네일 크기별 캐시를 분리해서 작게/보통/크게 전환 시
+        # 이미 생성된 썸네일은 다시 만들지 않고 바로 재사용한다.
         reader = QImageReader(image_path)
         reader.setAutoTransform(True)
 
         original_size = reader.size()
         if original_size.isValid():
             scaled_size = original_size.scaled(
-                self.thumbnail_size * 2,
+                target_size * 2,
                 Qt.KeepAspectRatio,
             )
             reader.setScaledSize(scaled_size)
@@ -520,7 +567,7 @@ class FilmFlipWindow(QWidget):
 
         if not pixmap.isNull():
             pixmap = pixmap.scaled(
-                self.thumbnail_size,
+                target_size,
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation,
             )
@@ -528,14 +575,41 @@ class FilmFlipWindow(QWidget):
         self.thumbnail_cache[cache_key] = pixmap
         return pixmap
 
+    def thumbnail_preset_loading_order(self):
+        preset_keys = [self.thumbnail_preset_key]
+
+        for key in THUMBNAIL_PRESETS:
+            if key != self.thumbnail_preset_key:
+                preset_keys.append(key)
+
+        return preset_keys
+
+    def build_thumbnail_queue(self, preset_keys=None):
+        generation = self.thumbnail_generation
+        preset_keys = preset_keys or self.thumbnail_preset_loading_order()
+        queue = []
+
+        for preset_key in preset_keys:
+            update_table = preset_key == self.thumbnail_preset_key
+            for row, image in enumerate(self.images):
+                cache_key = self.thumbnail_cache_key(image, preset_key)
+                if cache_key in self.thumbnail_cache:
+                    continue
+
+                queue.append((generation, row, image, preset_key, update_table))
+
+        return queue
+
     def start_thumbnail_loading(self):
         self.cancel_thumbnail_loading()
+        self.thumbnail_queue = self.build_thumbnail_queue()
 
-        generation = self.thumbnail_generation
-        self.thumbnail_queue = [
-            (generation, row, image)
-            for row, image in enumerate(self.images)
-        ]
+        if self.thumbnail_queue:
+            self.thumbnail_timer.start()
+
+    def restart_thumbnail_loading_for_current_size(self):
+        self.cancel_thumbnail_loading()
+        self.thumbnail_queue = self.build_thumbnail_queue()
 
         if self.thumbnail_queue:
             self.thumbnail_timer.start()
@@ -549,31 +623,41 @@ class FilmFlipWindow(QWidget):
         processed = 0
 
         while self.thumbnail_queue and processed < THUMBNAIL_BATCH_SIZE:
-            generation, row, image = self.thumbnail_queue.pop(0)
+            queue_item = self.thumbnail_queue.pop(0)
+
+            if len(queue_item) == 3:
+                # v1.1 큐 형식과 호환
+                generation, row, image = queue_item
+                preset_key = self.thumbnail_preset_key
+                update_table = True
+            else:
+                generation, row, image, preset_key, update_table = queue_item
 
             if generation != current_generation:
                 continue
 
-            if row < 0 or row >= self.table.rowCount():
-                continue
+            pixmap = self.make_thumbnail(image, preset_key)
 
-            item = self.table.item(row, 0)
+            if update_table and preset_key == self.thumbnail_preset_key:
+                if row < 0 or row >= self.table.rowCount():
+                    continue
 
-            if item is None:
-                continue
+                item = self.table.item(row, 0)
 
-            if item.data(Qt.UserRole) != str(image):
-                continue
+                if item is None:
+                    continue
 
-            pixmap = self.make_thumbnail(image)
+                if item.data(Qt.UserRole) != str(image):
+                    continue
 
-            if pixmap is not None and not pixmap.isNull():
-                item.setText("")
-                item.setIcon(QIcon(pixmap))
-            else:
-                item.setText("이미지")
+                if pixmap is not None and not pixmap.isNull():
+                    item.setText("")
+                    item.setIcon(QIcon(pixmap))
+                else:
+                    item.setText("이미지")
 
-            self.table.setRowHeight(row, self.row_height)
+                self.table.setRowHeight(row, self.row_height)
+
             processed += 1
 
         if not self.thumbnail_queue:
@@ -660,6 +744,7 @@ class FilmFlipWindow(QWidget):
                 new_images.append(path_map[image_path])
 
         if len(new_images) == len(self.images):
+            order_was_changed = new_images != self.images
             self.images = new_images
 
             # 행 이동 직후 전체 테이블을 다시 그리지 않는다.
@@ -670,6 +755,9 @@ class FilmFlipWindow(QWidget):
                     self.table.setRowHeight(row, self.row_height)
             finally:
                 self.table.setUpdatesEnabled(True)
+
+            if order_was_changed:
+                self.info.setText("변경된 순서는 이름변경시 적용됩니다.")
 
     def open_preview_from_row_only(self, row):
         self.open_preview_from_row(row, 0)
