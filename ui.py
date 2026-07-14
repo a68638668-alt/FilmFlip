@@ -323,8 +323,12 @@ class FilmFlipWindow(QWidget):
         super().__init__()
 
         self.settings = load_settings()
-        stored_metadata = self.settings.get("roll_metadata", {})
-        self.roll_metadata = dict(stored_metadata) if isinstance(stored_metadata, dict) else {}
+        # 롤 정보는 현재 작업 중인 폴더에만 유효한 임시 상태다.
+        # 이전 버전에서 저장한 값이 있더라도 앱을 다시 시작하면 복원하지 않는다.
+        self.roll_metadata = {}
+        if "roll_metadata" in self.settings:
+            self.settings.pop("roll_metadata", None)
+            save_settings(self.settings)
         self.dark_mode = self.settings.get("theme", "light") == "dark"
 
         self.setWindowTitle("FilmFlip v2.0")
@@ -1408,8 +1412,13 @@ class FilmFlipWindow(QWidget):
                 continue
             value = str(options.get(source_key, "") or "").strip()
             self.roll_metadata[target_key] = value
-        self.settings["roll_metadata"] = dict(self.roll_metadata)
-        save_settings(self.settings)
+        self.update_side_panels()
+
+    def reset_roll_metadata(self):
+        """Clear per-roll values without deleting reusable shooting presets."""
+        self.roll_metadata = {}
+        # Remove a legacy persisted value if an older settings file still has one.
+        self.settings.pop("roll_metadata", None)
         self.update_side_panels()
 
     def update_side_preview(self):
@@ -1633,9 +1642,12 @@ class FilmFlipWindow(QWidget):
         layout.addWidget(text_label)
         return cell
 
-    def load_folder(self, folder):
+    def load_folder(self, folder, reset_roll_info=False):
         self.cancel_thumbnail_loading()
-        self.current_folder = Path(folder)
+        next_folder = Path(folder)
+        if reset_roll_info and self.current_folder != next_folder:
+            self.reset_roll_metadata()
+        self.current_folder = next_folder
         self.update_status_bar()
         self.info.setText("폴더를 읽는 중입니다...")
         self.set_controls_enabled(False)
@@ -2180,7 +2192,7 @@ class FilmFlipWindow(QWidget):
         self.settings["last_folder"] = folder
         save_settings(self.settings)
 
-        self.load_folder(folder)
+        self.load_folder(folder, reset_roll_info=True)
         self.undo_button.setEnabled(False)
 
     def dragEnterEvent(self, event):
@@ -2210,7 +2222,7 @@ class FilmFlipWindow(QWidget):
         if os.path.isdir(folder):
             self.settings["last_folder"] = folder
             save_settings(self.settings)
-            self.load_folder(folder)
+            self.load_folder(folder, reset_roll_info=True)
             self.undo_button.setEnabled(False)
             event.acceptProposedAction()
             return
