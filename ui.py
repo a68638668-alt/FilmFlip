@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QLineEdit,
     QSpinBox,
-    QProgressDialog,
+    QProgressBar,
 )
 
 from dragdrop import ImageTable
@@ -71,6 +71,39 @@ class ExifWriteWorker(QObject):
         except Exception as error:
             result = {"changed": 0, "skipped": 0, "errors": [str(error)]}
         self.finished.emit(result)
+
+
+class ExifProgressDialog(QDialog):
+    """Small progress window that avoids QProgressDialog crashes on macOS Qt 6.11."""
+
+    def __init__(self, total, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("EXIF 정보 변경")
+        self.setWindowModality(Qt.WindowModal)
+        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
+        self.setMinimumWidth(360)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        self.message_label = QLabel("EXIF 정보를 저장하는 중…")
+        self.message_label.setWordWrap(True)
+        layout.addWidget(self.message_label)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, max(int(total), 1))
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        layout.addWidget(self.progress_bar)
+
+    def update_progress(self, done, total, filename):
+        self.progress_bar.setMaximum(max(int(total), 1))
+        self.progress_bar.setValue(int(done))
+        self.message_label.setText(f"{filename}\n{done} / {total}장 처리 완료")
+
+    def mark_complete(self):
+        self.progress_bar.setValue(self.progress_bar.maximum())
 
 
 THUMBNAIL_SIZE = QSize(140, 105)
@@ -1077,14 +1110,7 @@ class FilmFlipWindow(QWidget):
             "memo": values.get("description", "") or values.get("user_comment", ""),
         })
 
-        progress = QProgressDialog("EXIF 정보를 저장하는 중…", "", 0, len(self.images), self)
-        progress.setWindowTitle("EXIF 정보 변경")
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setCancelButton(None)
-        progress.setAutoClose(False)
-        progress.setAutoReset(False)
-        progress.setMinimumDuration(0)
-        progress.setValue(0)
+        progress = ExifProgressDialog(len(self.images), self)
 
         thread = QThread(self)
         worker = ExifWriteWorker(self.images, values)
@@ -1109,14 +1135,12 @@ class FilmFlipWindow(QWidget):
     def _update_exif_progress(self, done, total, filename):
         if self._exif_progress is None:
             return
-        self._exif_progress.setMaximum(max(total, 1))
-        self._exif_progress.setValue(done)
-        self._exif_progress.setLabelText(f"{filename}\n{done} / {total}장 처리 완료")
+        self._exif_progress.update_progress(done, total, filename)
 
     @Slot(object)
     def _finish_exif_write(self, result):
         if self._exif_progress is not None:
-            self._exif_progress.setValue(self._exif_progress.maximum())
+            self._exif_progress.mark_complete()
             self._exif_progress.close()
 
         message = f"{result['changed']}장의 EXIF 정보를 변경했습니다."
