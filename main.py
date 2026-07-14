@@ -1,14 +1,16 @@
+import signal
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtCore import QCoreApplication, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from ui import FilmFlipWindow
+from utils.design import FilmFlipProxyStyle
 
 APP_NAME = "FilmFlip"
-APP_VERSION = "1.1"
+APP_VERSION = "2.0.0"
 
 
 def resource_path(*parts: str) -> Path:
@@ -32,7 +34,17 @@ def apply_app_metadata(app: QApplication) -> None:
 
 def main() -> None:
     app = QApplication(sys.argv)
+    app.setStyle(FilmFlipProxyStyle(app.style()))
     apply_app_metadata(app)
+
+    # Let terminal Ctrl-C / SIGTERM close Qt cleanly during local development.
+    # Without a small Python callback tick, macOS can leave the Qt event loop
+    # running and a forced stop may be reported as a Python crash.
+    signal.signal(signal.SIGINT, lambda *_: app.quit())
+    signal.signal(signal.SIGTERM, lambda *_: app.quit())
+    signal_timer = QTimer(app)
+    signal_timer.timeout.connect(lambda: None)
+    signal_timer.start(200)
 
     window = FilmFlipWindow()
     window.show()

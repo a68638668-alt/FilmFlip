@@ -54,6 +54,10 @@ SETTINGS_FILE = get_data_file("settings.json")
 DEFAULT_SETTINGS = {
     "remember_last_folder": True,
     "last_folder": "",
+    "theme": "light",
+    "thumbnail_size": "medium",
+    "roll_base_count": 36,
+    "default_sort": "reverse",
 }
 
 

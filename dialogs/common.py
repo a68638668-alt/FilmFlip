@@ -3,7 +3,8 @@ import json
 import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import QDate, QDateTime, QEvent, QTime, Qt, Signal, QTimer
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QMessageBox,
     QDialog,
@@ -25,10 +26,13 @@ from PySide6.QtWidgets import (
     QApplication,
     QSizePolicy,
     QPlainTextEdit,
+    QDateEdit,
+    QDateTimeEdit,
 )
 
 
 from shooting_presets import load_shooting_presets, save_shooting_presets
+from utils.design import set_button_icon
 
 PRESET_FILE = get_data_file("filmflip_presets.json")
 
@@ -52,13 +56,13 @@ TEMPLATE_LABELS = {
 }
 
 FIELD_LABELS = {
-    "date": "📅 날짜",
-    "camera": "📷 카메라",
-    "film": "🎞 필름",
-    "lab": "🧪 현상소",
-    "place": "📍 장소",
-    "scanner": "🖨 스캐너",
-    "memo": "📝 메모",
+    "date": "날짜",
+    "camera": "카메라",
+    "film": "필름",
+    "lab": "현상소",
+    "place": "장소",
+    "scanner": "스캐너",
+    "memo": "메모",
     "number": "번호",
 }
 
@@ -170,6 +174,176 @@ class KoreanAwareLineEdit(QLineEdit):
 
         cursor = max(0, min(self.cursorPosition(), len(base)))
         return base[:cursor] + preedit + base[cursor:]
+
+
+class FilmDateEdit(QDateEdit):
+    """Optional shooting-date picker with an empty state and calendar popup."""
+
+    textChanged = Signal(str)
+    composingTextChanged = Signal()
+    EMPTY_DATE = QDate(1900, 1, 1)
+
+    def __init__(self, value="", parent=None):
+        super().__init__(parent)
+        self.setObjectName("filmDateEdit")
+        self.setCalendarPopup(True)
+        self.setDisplayFormat("yyyy-MM-dd")
+        self.setMinimumDate(self.EMPTY_DATE)
+        self.setMaximumDate(QDate(2199, 12, 31))
+        self.setSpecialValueText("날짜 선택")
+        normalized = str(value or "").strip().replace(":", "-")[:10]
+        parsed = QDate.fromString(normalized, "yyyy-MM-dd")
+        self.setDate(parsed if parsed.isValid() else self.EMPTY_DATE)
+        today = QDate.currentDate()
+        current = parsed if parsed.isValid() else today
+        self.calendarWidget().setCurrentPage(current.year(), current.month())
+        self.dateChanged.connect(self._date_changed)
+        self.lineEdit().installEventFilter(self)
+        self.lineEdit().setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.ClickFocus)
+        QTimer.singleShot(0, self._clear_section_highlight)
+
+    def _clear_section_highlight(self):
+        """Keep Qt from painting the year section as a blue text selection."""
+        self.setCurrentSection(QDateTimeEdit.NoSection)
+        line_edit = self.lineEdit()
+        if line_edit is not None:
+            line_edit.deselect()
+
+    def _date_changed(self, _date):
+        self.textChanged.emit(self.text())
+        self.composingTextChanged.emit()
+        QTimer.singleShot(0, self._clear_section_highlight)
+
+    def text(self):
+        if self.date() == self.EMPTY_DATE:
+            return ""
+        return self.date().toString("yyyy-MM-dd")
+
+    def setPlaceholderText(self, text):
+        self.setSpecialValueText(text or "날짜 선택")
+
+    def clear(self):
+        self.setDate(self.EMPTY_DATE)
+
+    def _calendar_click_event(self, event):
+        if self.date() == self.EMPTY_DATE:
+            self.setDate(QDate.currentDate())
+        local_position = event.position()
+        local_position.setX(max(1, self.width() - 5))
+        local_position.setY(self.height() / 2)
+        return QMouseEvent(
+            event.type(),
+            local_position,
+            event.globalPosition(),
+            event.button(),
+            event.buttons(),
+            event.modifiers(),
+            event.pointingDevice(),
+        )
+
+    def eventFilter(self, watched, event):
+        if watched is self.lineEdit() and event.type() == QEvent.FocusIn:
+            QTimer.singleShot(0, self._clear_section_highlight)
+        if watched is self.lineEdit() and event.type() in (
+            QEvent.MouseButtonPress,
+            QEvent.MouseButtonRelease,
+        ) and event.button() == Qt.LeftButton:
+            mapped_event = self._calendar_click_event(event)
+            if event.type() == QEvent.MouseButtonPress:
+                QDateEdit.mousePressEvent(self, mapped_event)
+            else:
+                QDateEdit.mouseReleaseEvent(self, mapped_event)
+            QTimer.singleShot(0, self._clear_section_highlight)
+            return True
+        return super().eventFilter(watched, event)
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        QTimer.singleShot(0, self._clear_section_highlight)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._clear_section_highlight)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            event = self._calendar_click_event(event)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            event = self._calendar_click_event(event)
+        super().mouseReleaseEvent(event)
+        QTimer.singleShot(0, self._clear_section_highlight)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            self.clear()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class FilmDateTimeEdit(QDateTimeEdit):
+    """Optional EXIF date/time picker that keeps a real empty state."""
+
+    EMPTY_DATETIME = QDateTime(QDate(1900, 1, 1), QTime(0, 0, 0))
+
+    def __init__(self, value="", parent=None):
+        super().__init__(parent)
+        self.setObjectName("filmDateTimeEdit")
+        self.setCalendarPopup(True)
+        self.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.setMinimumDateTime(self.EMPTY_DATETIME)
+        self.setMaximumDate(QDate(2199, 12, 31))
+        self.setSpecialValueText("촬영 일시 선택")
+
+        normalized = str(value or "").replace(":", "-", 2)
+        parsed = QDateTime.fromString(normalized, "yyyy-MM-dd HH:mm:ss")
+        self.setDateTime(parsed if parsed.isValid() else self.EMPTY_DATETIME)
+        current = parsed if parsed.isValid() else QDateTime.currentDateTime()
+        self.calendarWidget().setCurrentPage(current.date().year(), current.date().month())
+
+    def text(self):
+        if self.dateTime() == self.EMPTY_DATETIME:
+            return ""
+        return self.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+
+    def clear(self):
+        self.setDateTime(self.EMPTY_DATETIME)
+
+    def setPlaceholderText(self, text):
+        self.setSpecialValueText(text or "촬영 일시 선택")
+
+    def _calendar_click_event(self, event):
+        local_position = event.position()
+        if event.button() == Qt.LeftButton:
+            if self.dateTime() == self.EMPTY_DATETIME:
+                self.setDateTime(QDateTime.currentDateTime())
+            local_position.setX(max(1, self.width() - 5))
+        return QMouseEvent(
+            event.type(),
+            local_position,
+            event.globalPosition(),
+            event.button(),
+            event.buttons(),
+            event.modifiers(),
+            event.pointingDevice(),
+        )
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(self._calendar_click_event(event))
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(self._calendar_click_event(event))
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            self.clear()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 
@@ -441,8 +615,8 @@ class PresetManageDialog(QDialog):
         button_row = QHBoxLayout()
 
         add_button = QPushButton("＋ 추가")
-        edit_button = QPushButton("📝 수정")
-        delete_button = QPushButton("🗑 삭제")
+        edit_button = set_button_icon(QPushButton("수정"), "edit")
+        delete_button = set_button_icon(QPushButton("삭제"), "trash")
         up_button = QPushButton("▲ 위로")
         down_button = QPushButton("▼ 아래로")
 
@@ -592,8 +766,8 @@ class ShootingPresetManageDialog(QDialog):
 
         up_button = QPushButton("▲ 위로")
         down_button = QPushButton("▼ 아래로")
-        rename_button = QPushButton("📝 이름 수정")
-        delete_button = QPushButton("🗑 삭제")
+        rename_button = set_button_icon(QPushButton("이름 수정"), "edit")
+        delete_button = set_button_icon(QPushButton("삭제"), "trash")
 
         for button in (up_button, down_button, rename_button, delete_button):
             _set_dialog_button_width(button)
@@ -751,6 +925,22 @@ class TemplateListWidget(QListWidget):
         self.setDragDropMode(QAbstractItemView.NoDragDrop)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setAlternatingRowColors(True)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self._scrollbar_hide_timer = QTimer(self)
+        self._scrollbar_hide_timer.setSingleShot(True)
+        self._scrollbar_hide_timer.setInterval(850)
+        self._scrollbar_hide_timer.timeout.connect(self._hide_scrollbars)
+
+    def wheelEvent(self, event):
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        super().wheelEvent(event)
+        self._scrollbar_hide_timer.start()
+
+    def _hide_scrollbars(self):
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
     def move_current_up(self):
         row = self.currentRow()
@@ -773,5 +963,3 @@ class TemplateListWidget(QListWidget):
         self.insertItem(row + 1, item)
         self.setCurrentRow(row + 1)
         self.orderChanged.emit()
-
-

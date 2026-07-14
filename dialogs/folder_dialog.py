@@ -25,15 +25,126 @@ from PySide6.QtWidgets import (
 )
 
 from shooting_presets import load_shooting_presets, save_shooting_presets
+from utils.design import app_icon, dialog_theme_override, field_icon_name, icon_text_widget, polish_combo_boxes, set_button_icon
 from .common import (
     PRESET_FILE, PRESET_KEYS, TEMPLATE_LABELS, FIELD_LABELS, DEFAULT_PRESETS,
     DEFAULT_TEMPLATE, DEFAULT_FOLDER_TEMPLATE, _safe_component, _normalize_date,
-    _normalize_memo, KoreanAwareLineEdit, PresetManageDialog, ShootingPresetManageDialog,
+    _normalize_memo, FilmDateEdit, KoreanAwareLineEdit, PresetManageDialog, ShootingPresetManageDialog,
     TemplateListWidget, load_presets, save_presets, load_template_settings,
     save_template_settings, load_folder_template_settings, save_folder_template_settings,
 )
 
 class FolderRenameDialog(QDialog):
+
+    def apply_v2_dialog_style(self):
+        self.setStyleSheet("""
+            QDialog {
+                background: #f5efe6;
+                color: #241b14;
+                font-family: "Apple SD Gothic Neo", "Helvetica Neue", "Segoe UI";
+                font-size: 12px;
+            }
+            QLabel { background: transparent; }
+            QGroupBox {
+                background: rgba(234, 224, 211, 0.78);
+                border: 1px solid #d8cab7;
+                border-radius: 10px;
+                margin-top: 12px;
+                padding-top: 8px;
+                font-weight: 800;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 6px;
+            }
+            QLineEdit, QComboBox, QPlainTextEdit, QDateEdit {
+                background: #fffaf1;
+                color: #241b14;
+                border: 1px solid #d4c6b3;
+                border-radius: 7px;
+                padding: 4px 8px;
+                min-height: 18px;
+            }
+            QComboBox { padding-right: 38px; }
+            QComboBox::drop-down {
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: 34px;
+                background: #ead2b3;
+                border-left: 1px solid #b7824d;
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }
+            QComboBox::drop-down:hover { background: #dcb785; border-left-color: #9e6837; }
+            QComboBox::down-arrow { image: url(filmflipicons:chevron_down.svg); width: 13px; height: 13px; }
+            QDateEdit { padding-right: 38px; }
+            QDateEdit::drop-down {
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: 34px;
+                background: #f3e4d0;
+                border-left: 1px solid #d4c6b3;
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }
+            QDateEdit::drop-down:hover { background: #e7ceb0; }
+            QDateEdit::down-arrow { image: url(filmflipicons:calendar.svg); width: 17px; height: 17px; }
+            QLineEdit:hover, QComboBox:hover, QPlainTextEdit:hover, QDateEdit:hover,
+            QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QDateEdit:focus {
+                background: #fff1dc;
+                border-color: #c39158;
+            }
+            QComboBox QAbstractItemView {
+                background: #fffaf1;
+                color: #241b14;
+                border: 1px solid #d4c6b3;
+                selection-background-color: #ead6bc;
+                selection-color: #241b14;
+                outline: 0;
+            }
+            QComboBox QAbstractItemView::item {
+                min-height: 26px;
+                padding: 4px 8px;
+                color: #241b14;
+            }
+            QComboBox QAbstractItemView::item:hover { background: #efdcc1; }
+            QListWidget {
+                background: #1b1813;
+                color: #f2e5d2;
+                border: 1px solid #33291d;
+                border-radius: 8px;
+                padding: 4px;
+                alternate-background-color: #211d17;
+            }
+            QListWidget::item {
+                padding: 3px 7px;
+                border-bottom: 1px solid rgba(255,255,255,0.05);
+            }
+            QListWidget::item:selected {
+                background: #3b2d1f;
+                color: #fff6e8;
+            }
+            QPushButton {
+                background: #f7ead8;
+                border: 1px solid #d2bc9e;
+                border-radius: 10px;
+                padding: 5px 10px;
+                color: #2c2118;
+                font-weight: 800;
+                min-height: 20px;
+            }
+            QPushButton:hover { background: #ecd8bc; }
+            QDialogButtonBox QPushButton { min-width: 86px; }
+            QDialogButtonBox QPushButton[text="이름 변경"],
+            QDialogButtonBox QPushButton[text="폴더명 변경"] {
+                background: #a84d2f;
+                color: #fff4df;
+                border-color: #81351f;
+            }
+            QRadioButton { background: transparent; padding: 3px; }
+        """)
+
     def __init__(self, current_folder, parent=None):
         super().__init__(parent)
 
@@ -45,12 +156,18 @@ class FolderRenameDialog(QDialog):
         self._preview_updates_suspended = 0
 
         self.setWindowTitle("폴더명 변경")
+        self.resize(700, 740)
         self.setMinimumWidth(680)
+        self.apply_v2_dialog_style()
+        self.setStyleSheet(self.styleSheet() + dialog_theme_override(getattr(parent, "dark_mode", False)))
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 10)
+        layout.setSpacing(5)
 
         current_group = QGroupBox("현재 폴더")
         current_layout = QVBoxLayout(current_group)
+        current_layout.setContentsMargins(9, 7, 9, 7)
         self.current_name_label = QLabel(self.current_folder.name)
         self.current_name_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         current_layout.addWidget(self.current_name_label)
@@ -58,14 +175,16 @@ class FolderRenameDialog(QDialog):
 
         preset_group = QGroupBox("촬영 프리셋")
         preset_layout = QHBoxLayout(preset_group)
+        preset_layout.setContentsMargins(9, 7, 9, 7)
+        preset_layout.setSpacing(6)
 
         self.shooting_combo = QComboBox()
         self._reload_shooting_presets()
 
-        self.add_shooting_button = QPushButton("💾 저장")
-        self.edit_shooting_button = QPushButton("📝 수정")
-        self.delete_shooting_button = QPushButton("🗑 삭제")
-        self.manage_shooting_button = QPushButton("⚙️ 편집")
+        self.add_shooting_button = set_button_icon(QPushButton("저장"), "save")
+        self.edit_shooting_button = set_button_icon(QPushButton("수정"), "edit")
+        self.delete_shooting_button = set_button_icon(QPushButton("삭제"), "trash")
+        self.manage_shooting_button = set_button_icon(QPushButton("편집"), "settings")
 
         for button in [
             self.add_shooting_button,
@@ -96,9 +215,13 @@ class FolderRenameDialog(QDialog):
 
         field_group = QGroupBox("폴더명에 사용할 정보")
         field_grid = QGridLayout(field_group)
+        field_grid.setContentsMargins(9, 8, 9, 8)
+        field_grid.setHorizontalSpacing(10)
+        field_grid.setVerticalSpacing(5)
+        field_grid.setColumnStretch(1, 1)
 
-        self.date_edit = KoreanAwareLineEdit()
-        self.date_edit.setPlaceholderText("예: 2026-07-01")
+        self.date_edit = FilmDateEdit()
+        self.date_edit.setPlaceholderText("날짜 선택")
 
         self.memo_edit = KoreanAwareLineEdit()
         self.memo_edit.setPlaceholderText("예: 남이섬, 홍길동, 아침스냅")
@@ -109,9 +232,9 @@ class FolderRenameDialog(QDialog):
         self.place_combo = self._create_combo("place")
         self.scanner_combo = self._create_combo("scanner")
 
-        field_grid.addWidget(QLabel(FIELD_LABELS["date"]), 0, 0)
+        field_grid.addWidget(icon_text_widget(FIELD_LABELS["date"], "calendar"), 0, 0)
         field_grid.addWidget(self.date_edit, 0, 1)
-        field_grid.addWidget(QLabel(FIELD_LABELS["memo"]), 1, 0)
+        field_grid.addWidget(icon_text_widget(FIELD_LABELS["memo"], "memo"), 1, 0)
         field_grid.addWidget(self.memo_edit, 1, 1)
 
         self._add_preset_row(field_grid, 2, "camera", self.camera_combo)
@@ -124,13 +247,15 @@ class FolderRenameDialog(QDialog):
 
         order_group = QGroupBox("폴더명 구성")
         order_layout = QVBoxLayout(order_group)
+        order_layout.setContentsMargins(9, 8, 9, 8)
+        order_layout.setSpacing(5)
 
         help_label = QLabel("체크한 항목만 폴더명에 들어갑니다. ▲/▼로 순서를 바꿀 수 있습니다.")
         help_label.setWordWrap(True)
         order_layout.addWidget(help_label)
 
         self.template_list = TemplateListWidget()
-        self.template_list.setMinimumHeight(190)
+        self.template_list.setFixedHeight(184)
         order_layout.addWidget(self.template_list)
 
         move_buttons = QHBoxLayout()
@@ -159,13 +284,13 @@ class FolderRenameDialog(QDialog):
         self.current_preview_label = QLabel(self.current_folder.name)
         self.current_preview_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.current_preview_label.setWordWrap(False)
-        self.current_preview_label.setMinimumHeight(28)
+        self.current_preview_label.setMinimumHeight(22)
         self.current_preview_label.setStyleSheet("font-weight: 600;")
 
         self.new_preview_label = QLabel("")
         self.new_preview_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.new_preview_label.setWordWrap(False)
-        self.new_preview_label.setMinimumHeight(28)
+        self.new_preview_label.setMinimumHeight(22)
         self.new_preview_label.setStyleSheet("font-weight: 600;")
 
         preview_layout.addWidget(QLabel("현재 폴더명"), 0, 0)
@@ -206,6 +331,7 @@ class FolderRenameDialog(QDialog):
         layout.addWidget(buttons)
 
         self._load_template_list()
+        polish_combo_boxes(self, getattr(parent, "dark_mode", False))
         self.update_preview()
 
     def _reload_shooting_presets(self, keep_name=""):
@@ -246,8 +372,11 @@ class FolderRenameDialog(QDialog):
         combo.blockSignals(False)
 
     def _add_preset_row(self, grid, row, key, combo):
-        label = QLabel(FIELD_LABELS.get(key, PRESET_KEYS[key]))
-        manage_button = QPushButton("⚙️ 관리")
+        label = icon_text_widget(
+            FIELD_LABELS.get(key, PRESET_KEYS[key]),
+            field_icon_name(key),
+        )
+        manage_button = set_button_icon(QPushButton("관리"), "settings")
         manage_button.setMinimumWidth(62)
         manage_button.setMaximumWidth(76)
         manage_button.setToolTip(f"{PRESET_KEYS[key]} 목록 저장/수정/삭제/순서 변경")
@@ -539,6 +668,7 @@ class FolderRenameDialog(QDialog):
                 continue
 
             item = QListWidgetItem(f"☰ {FIELD_LABELS.get(key, TEMPLATE_LABELS[key])}")
+            item.setIcon(app_icon(field_icon_name(key), 20))
             item.setData(Qt.UserRole, key)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if enabled.get(key, False) else Qt.Unchecked)
@@ -667,7 +797,3 @@ class FolderRenameDialog(QDialog):
             "template": self._template(),
             "template_settings": settings,
         }
-
-
-
-

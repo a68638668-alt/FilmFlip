@@ -1,4 +1,4 @@
-from PySide6.QtCore import QMimeData, Qt, Signal
+from PySide6.QtCore import QMimeData, Qt, Signal, QTimer
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QApplication,
@@ -30,12 +30,13 @@ class ImageTable(QTableWidget):
         self._drag_start_position = None
         self._drag_source_row = -1
 
-        self.setColumnCount(3)
+        self.setColumnCount(4)
         self.setHorizontalHeaderLabels(
             [
                 "썸네일",
                 "현재 파일명",
                 "변경될 파일명",
+                "상태",
             ]
         )
 
@@ -43,7 +44,9 @@ class ImageTable(QTableWidget):
         header.setSectionResizeMode(0, QHeaderView.Fixed)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.Fixed)
         self.setColumnWidth(0, self.THUMBNAIL_COLUMN_WIDTH)
+        self.setColumnWidth(3, 122)
 
         vertical_header = self.verticalHeader()
         vertical_header.setVisible(False)
@@ -65,15 +68,31 @@ class ImageTable(QTableWidget):
         self.setDefaultDropAction(Qt.MoveAction)
 
         self.setAlternatingRowColors(True)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scrollbar_hide_timer = QTimer(self)
+        self._scrollbar_hide_timer.setSingleShot(True)
+        self._scrollbar_hide_timer.setInterval(850)
+        self._scrollbar_hide_timer.timeout.connect(self._hide_scrollbars)
         # 썸네일 위에서 마우스를 움직일 때마다 hover 스타일이
         # 셀 전체 repaint를 유발할 수 있어 선택 색상만 유지한다.
         self.setStyleSheet(
             """
             QTableWidget::item:selected {
-                background-color: #3f5f8f;
+                background-color: #3b2d20;
             }
             """
         )
+
+    def wheelEvent(self, event):
+        """Reveal the scrollbar only while the user is actively scrolling."""
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        super().wheelEvent(event)
+        self._scrollbar_hide_timer.start()
+
+    def _hide_scrollbars(self):
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
     def _event_pos(self, event):
         try:
@@ -192,6 +211,13 @@ class ImageTable(QTableWidget):
                 self.takeItem(source_row, column)
                 for column in range(self.columnCount())
             ]
+            row_widgets = []
+            for column in range(self.columnCount()):
+                widget = self.cellWidget(source_row, column)
+                if widget is not None:
+                    self.removeCellWidget(source_row, column)
+                    widget.setParent(self)
+                row_widgets.append(widget)
 
             self.removeRow(source_row)
 
@@ -205,6 +231,8 @@ class ImageTable(QTableWidget):
             for column, item in enumerate(row_items):
                 if item is not None:
                     self.setItem(insert_row, column, item)
+                if row_widgets[column] is not None:
+                    self.setCellWidget(insert_row, column, row_widgets[column])
 
             self.selectRow(insert_row)
         finally:
