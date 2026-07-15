@@ -696,7 +696,17 @@ class FilmFlipWindow(QWidget):
                 color: #21160f;
                 border: 0px;
                 font-family: Menlo, Monaco, "SF Mono", Consolas, monospace;
-                font-size: 15px;
+                font-size: 14px;
+                font-weight: 900;
+            }
+            QLabel#rollCardOverage {
+                background: #c95b36;
+                color: #fff8eb;
+                border: 1px solid #9e3f25;
+                border-radius: 6px;
+                padding: 1px 6px;
+                font-family: Menlo, Monaco, "SF Mono", Consolas, monospace;
+                font-size: 12px;
                 font-weight: 900;
             }
             QProgressBar#rollCardProgress {
@@ -1066,10 +1076,23 @@ class FilmFlipWindow(QWidget):
         self.roll_card_label.setWordWrap(False)
         roll_card_layout.addWidget(self.roll_card_label)
 
+        roll_progress_row = QHBoxLayout()
+        roll_progress_row.setContentsMargins(0, 0, 0, 0)
+        roll_progress_row.setSpacing(7)
+
         self.roll_card_progress = QProgressBar()
         self.roll_card_progress.setObjectName("rollCardProgress")
         self.roll_card_progress.setTextVisible(False)
-        roll_card_layout.addWidget(self.roll_card_progress)
+        roll_progress_row.addWidget(self.roll_card_progress, stretch=1)
+
+        self.roll_card_overage_label = QLabel()
+        self.roll_card_overage_label.setObjectName("rollCardOverage")
+        self.roll_card_overage_label.setAlignment(Qt.AlignCenter)
+        self.roll_card_overage_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.roll_card_overage_label.hide()
+        roll_progress_row.addWidget(self.roll_card_overage_label)
+
+        roll_card_layout.addLayout(roll_progress_row)
 
         layout.addWidget(roll_card)
 
@@ -1405,12 +1428,10 @@ class FilmFlipWindow(QWidget):
     def roll_progress_text(self):
         base_count = self.roll_base_count()
         if not self.images:
-            return f"ROLL   00 / {base_count} EXP."
+            return f"ROLL 00/{base_count} EXP."
 
         current = self.selected_row_index() + 1
-        overage = max(0, len(self.images) - base_count)
-        extra = f"  +{overage}" if overage else ""
-        return f"ROLL   {current} / {base_count} EXP.{extra}"
+        return f"ROLL {current}/{base_count} EXP."
 
     def update_side_panels(self):
         if hasattr(self, "roll_card_label"):
@@ -1420,6 +1441,10 @@ class FilmFlipWindow(QWidget):
             current = self.selected_row_index() + 1 if self.images else 0
             self.roll_card_progress.setRange(0, base_count)
             self.roll_card_progress.setValue(min(current, base_count))
+        if hasattr(self, "roll_card_overage_label"):
+            overage = max(0, len(self.images) - self.roll_base_count())
+            self.roll_card_overage_label.setText(f"+{overage}")
+            self.roll_card_overage_label.setVisible(overage > 0)
 
         if hasattr(self, "roll_info_labels"):
             for key, value_widget in self.roll_info_labels.items():
