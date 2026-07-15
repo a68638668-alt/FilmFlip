@@ -686,16 +686,30 @@ class FilmFlipWindow(QWidget):
                 font-size: 12px;
                 font-weight: 900;
             }
-            QLabel#rollCard {
+            QFrame#rollCard {
                 background: #ead8b9;
-                color: #21160f;
                 border: 1px solid #bb925e;
                 border-radius: 8px;
+            }
+            QLabel#rollCardText {
+                background: transparent;
+                color: #21160f;
+                border: 0px;
                 font-family: Menlo, Monaco, "SF Mono", Consolas, monospace;
                 font-size: 15px;
                 font-weight: 900;
-                padding: 10px;
-                line-height: 150%;
+            }
+            QProgressBar#rollCardProgress {
+                background: #d4b98d;
+                border: 1px solid #8d6b43;
+                border-radius: 4px;
+                min-height: 10px;
+                max-height: 10px;
+                text-align: center;
+            }
+            QProgressBar#rollCardProgress::chunk {
+                background: #21160f;
+                border-radius: 3px;
             }
             QPushButton {
                 background: #f8f2e8;
@@ -1039,12 +1053,25 @@ class FilmFlipWindow(QWidget):
         layout.addLayout(thumbnail_row)
         layout.addStretch(1)
 
+        roll_card = QFrame()
+        roll_card.setObjectName("rollCard")
+        roll_card.setMinimumHeight(78)
+        roll_card_layout = QVBoxLayout(roll_card)
+        roll_card_layout.setContentsMargins(12, 10, 12, 10)
+        roll_card_layout.setSpacing(7)
+
         self.roll_card_label = QLabel()
-        self.roll_card_label.setObjectName("rollCard")
+        self.roll_card_label.setObjectName("rollCardText")
         self.roll_card_label.setAlignment(Qt.AlignCenter)
-        self.roll_card_label.setMinimumHeight(78)
         self.roll_card_label.setWordWrap(False)
-        layout.addWidget(self.roll_card_label)
+        roll_card_layout.addWidget(self.roll_card_label)
+
+        self.roll_card_progress = QProgressBar()
+        self.roll_card_progress.setObjectName("rollCardProgress")
+        self.roll_card_progress.setTextVisible(False)
+        roll_card_layout.addWidget(self.roll_card_progress)
+
+        layout.addWidget(roll_card)
 
         return panel
 
@@ -1378,19 +1405,21 @@ class FilmFlipWindow(QWidget):
     def roll_progress_text(self):
         base_count = self.roll_base_count()
         if not self.images:
-            return f"ROLL   00 / {base_count} EXP.\n░░░░░░░░░░"
+            return f"ROLL   00 / {base_count} EXP."
 
         current = self.selected_row_index() + 1
-        bar_count = 10
-        filled = max(1, min(bar_count, round((current / max(base_count, 1)) * bar_count)))
-        bar = "█" * filled + "░" * (bar_count - filled)
         overage = max(0, len(self.images) - base_count)
         extra = f"  +{overage}" if overage else ""
-        return f"ROLL   {current} / {base_count} EXP.{extra}\n{bar}"
+        return f"ROLL   {current} / {base_count} EXP.{extra}"
 
     def update_side_panels(self):
         if hasattr(self, "roll_card_label"):
             self.roll_card_label.setText(self.roll_progress_text())
+        if hasattr(self, "roll_card_progress"):
+            base_count = max(self.roll_base_count(), 1)
+            current = self.selected_row_index() + 1 if self.images else 0
+            self.roll_card_progress.setRange(0, base_count)
+            self.roll_card_progress.setValue(min(current, base_count))
 
         if hasattr(self, "roll_info_labels"):
             for key, value_widget in self.roll_info_labels.items():
