@@ -1244,7 +1244,7 @@ class FilmFlipWindow(QWidget):
         self.apply_thumbnail_table_settings()
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.table.verticalScrollBar().setSingleStep(36)
-        self.table.orderChanged.connect(self.sync_order)
+        self.table.rowMoveRequested.connect(self.move_image_row)
         self.table.cellDoubleClicked.connect(self.open_preview_from_row)
         self.table.rowDoubleClicked.connect(self.open_preview_from_row_only)
         self.table.itemSelectionChanged.connect(self.update_side_panels)
@@ -2105,6 +2105,30 @@ class FilmFlipWindow(QWidget):
             if order_was_changed:
                 self.info.setText("변경된 순서는 이름변경시 적용됩니다.")
                 self.update_side_panels()
+
+    @Slot(int, int)
+    def move_image_row(self, source_row, destination_row):
+        """Reorder the source list after a table drop, then rebuild safely."""
+        image_count = len(self.images)
+        if (
+            source_row < 0
+            or source_row >= image_count
+            or destination_row < 0
+            or destination_row >= image_count
+            or source_row == destination_row
+        ):
+            return
+
+        moved_image = self.images.pop(source_row)
+        self.images.insert(destination_row, moved_image)
+
+        # 셀 위젯을 직접 이동하지 않고 캐시된 썸네일로 행을 재생성한다.
+        # macOS의 removeCellWidget/removeRow 수명 충돌을 피하면서도
+        # 기존 썸네일 캐시를 사용하므로 다시 디코딩하지 않는다.
+        self.refresh_preview()
+        self.table.setCurrentCell(destination_row, 0)
+        self.info.setText("변경된 순서는 이름변경시 적용됩니다.")
+        self.update_side_panels()
 
     def open_preview_from_row_only(self, row):
         self.open_preview_from_row(row, 0)

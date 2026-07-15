@@ -18,6 +18,7 @@ class ImageTable(QTableWidget):
     """
 
     orderChanged = Signal()
+    rowMoveRequested = Signal(int, int)
     rowDoubleClicked = Signal(int)
 
     MIME_TYPE = "application/x-filmflip-row"
@@ -204,42 +205,17 @@ class ImageTable(QTableWidget):
             event.accept()
             return
 
-        self.setUpdatesEnabled(False)
-        self.blockSignals(True)
-        try:
-            row_items = [
-                self.takeItem(source_row, column)
-                for column in range(self.columnCount())
-            ]
-            row_widgets = []
-            for column in range(self.columnCount()):
-                widget = self.cellWidget(source_row, column)
-                if widget is not None:
-                    self.removeCellWidget(source_row, column)
-                    widget.setParent(self)
-                row_widgets.append(widget)
-
-            self.removeRow(source_row)
-
-            if insert_row > source_row:
-                insert_row -= 1
-
-            insert_row = max(0, min(insert_row, self.rowCount()))
-            self.insertRow(insert_row)
-            self.setRowHeight(insert_row, self.ROW_HEIGHT)
-
-            for column, item in enumerate(row_items):
-                if item is not None:
-                    self.setItem(insert_row, column, item)
-                if row_widgets[column] is not None:
-                    self.setCellWidget(insert_row, column, row_widgets[column])
-
-            self.selectRow(insert_row)
-        finally:
-            self.blockSignals(False)
-            self.setUpdatesEnabled(True)
-            self.viewport().update()
+        destination_row = insert_row - 1 if insert_row > source_row else insert_row
+        destination_row = max(0, min(destination_row, self.rowCount() - 1))
 
         event.setDropAction(Qt.MoveAction)
         event.accept()
-        self.orderChanged.emit()
+
+        # QTableWidget의 셀 위젯을 removeRow 중에 옮기면 macOS Qt가 이미
+        # 삭제 예약한 네이티브 위젯을 다시 참조해 종료될 수 있다. 드롭 이벤트가
+        # 끝난 다음 상위 창이 이미지 목록을 바꾸고 테이블을 안전하게 재생성한다.
+        QTimer.singleShot(
+            0,
+            lambda source=source_row, destination=destination_row:
+                self.rowMoveRequested.emit(source, destination),
+        )

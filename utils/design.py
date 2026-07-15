@@ -95,6 +95,7 @@ class ComboPopupDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
         for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
             opt.palette.setColor(group, QPalette.Text, self.foreground_color)
             opt.palette.setColor(group, QPalette.WindowText, self.foreground_color)
@@ -122,9 +123,29 @@ class ComboPopupDelegate(QStyledItemDelegate):
             painter.setBrush(fill)
             painter.drawRoundedRect(fill_rect, 5, 5)
             painter.restore()
-        opt.state &= ~QStyle.State_MouseOver
-        opt.state &= ~QStyle.State_Selected
-        super().paint(painter, opt, index)
+
+        # QStyledItemDelegate의 기본 텍스트 그리기는 부모 QSS의 더 구체적인
+        # ::item 색상 규칙을 다시 가져올 수 있다. Windows에서는 이 때문에
+        # 일반 모드의 어두운 글자가 다크 팝업에 남으므로 텍스트를 직접 그린다.
+        text_rect = opt.rect.adjusted(12, 0, -10, 0)
+        if not opt.icon.isNull():
+            icon_size = opt.decorationSize if opt.decorationSize.isValid() else QSize(16, 16)
+            icon_rect = text_rect
+            icon_rect.setWidth(icon_size.width())
+            icon_rect.setHeight(icon_size.height())
+            icon_rect.moveTop(opt.rect.top() + (opt.rect.height() - icon_size.height()) // 2)
+            opt.icon.paint(painter, icon_rect, Qt.AlignCenter)
+            text_rect.setLeft(icon_rect.right() + 7)
+
+        painter.save()
+        painter.setPen(self.foreground_color)
+        painter.setFont(opt.font)
+        painter.drawText(
+            text_rect,
+            Qt.AlignLeft | Qt.AlignVCenter | Qt.TextSingleLine,
+            opt.text,
+        )
+        painter.restore()
 
 
 class ComboPopupSizer(QObject):
@@ -194,7 +215,7 @@ def polish_combo_box(combo, dark_mode=False):
         f"border: 1px solid {border}; outline: 0px; padding: 3px; "
         f"selection-background-color: {selected}; selection-color: {foreground}; }} "
         "QAbstractItemView::item { min-height: 21px; padding: 2px 8px; "
-        "border: 0px; border-radius: 5px; margin: 0px 2px; } "
+        f"border: 0px; border-radius: 5px; margin: 0px 2px; color: {foreground}; }} "
         f"QAbstractItemView::item:hover {{ background-color: {hover}; color: {foreground}; }} "
         f"QAbstractItemView::item:selected {{ background-color: {selected}; color: {foreground}; }}"
     )
@@ -264,7 +285,9 @@ def dialog_theme_override(dark_mode):
             background: #1f1b18; color: #f7ebda; border: 1px solid #665544;
             selection-background-color: #75543a; selection-color: #fff7eb;
         }
+        QComboBox QAbstractItemView::item { color: #f7ebda; }
         QComboBox QAbstractItemView::item:hover { background: #60452f; color: #fff7eb; }
+        QComboBox QAbstractItemView::item:selected { background: #75543a; color: #fff7eb; }
         QComboBox::drop-down {
             background: #302821; border-left: 1px solid #665544;
             border-top-right-radius: 6px; border-bottom-right-radius: 6px;
