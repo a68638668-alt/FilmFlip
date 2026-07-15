@@ -79,6 +79,9 @@ class FilmFlipProxyStyle(QProxyStyle):
 class ComboPopupDelegate(QStyledItemDelegate):
     """Paint popup colors consistently instead of relying on the OS palette."""
 
+    MIN_ROW_HEIGHT = 30
+    TEXT_VERTICAL_PADDING = 12
+
     def __init__(
         self,
         hover_color,
@@ -92,6 +95,15 @@ class ComboPopupDelegate(QStyledItemDelegate):
         self.selected_color = QColor(selected_color)
         self.foreground_color = QColor(foreground_color)
         self.background_color = QColor(background_color)
+
+    def sizeHint(self, option, index):
+        """Leave enough room for bold Korean glyphs at every display scale."""
+        hint = super().sizeHint(option, index)
+        font_height = option.fontMetrics.height()
+        hint.setHeight(
+            max(hint.height(), self.MIN_ROW_HEIGHT, font_height + self.TEXT_VERTICAL_PADDING)
+        )
+        return hint
 
     def paint(self, painter, option, index):
         opt = QStyleOptionViewItem(option)
@@ -111,7 +123,7 @@ class ComboPopupDelegate(QStyledItemDelegate):
         fill = self.hover_color if hovered else self.selected_color if selected else None
         if fill is not None:
             fill_rect = opt.rect.adjusted(4, 0, -4, 0)
-            fill_height = min(fill_rect.height(), opt.fontMetrics.height() + 2)
+            fill_height = min(fill_rect.height() - 2, opt.fontMetrics.height() + 6)
             # macOS의 한글 글리프는 행의 기하학적 중앙보다 살짝 위에 보인다.
             # 배경도 글자의 시각적 중심에 맞춰 1px 위로 보정한다.
             vertical_gap = max(0, opt.rect.height() - fill_height)
@@ -163,11 +175,18 @@ class ComboPopupSizer(QObject):
     def adjust_popup(self):
         view = self.combo.view()
         visible_rows = min(self.combo.count(), self.combo.maxVisibleItems())
-        row_height = max(25, view.sizeHintForRow(0)) if visible_rows else 25
-        view_height = visible_rows * row_height + 8
+        row_height = (
+            max(ComboPopupDelegate.MIN_ROW_HEIGHT, view.sizeHintForRow(0))
+            if visible_rows
+            else ComboPopupDelegate.MIN_ROW_HEIGHT
+        )
+        # The view has 5px inner padding on both sides. Keeping it outside the
+        # row calculation prevents the first and last glyphs from touching the
+        # popup frame on macOS and Windows.
+        view_height = visible_rows * row_height + 12
         view.setFixedHeight(view_height)
         popup = view.window()
-        popup.setFixedHeight(view_height + 8)
+        popup.setFixedHeight(view_height + 4)
 
 
 def polish_combo_box(combo, dark_mode=False):
@@ -179,10 +198,11 @@ def polish_combo_box(combo, dark_mode=False):
         old_sizer.deleteLater()
     old_delegate = getattr(combo, "_filmflip_popup_delegate", None)
     combo.setMaxVisibleItems(5)
-    view.setMaximumHeight(133)
+    view.setMaximumHeight(172)
     fusion_style = QStyleFactory.create("Fusion")
     if fusion_style is not None:
         view.setStyle(fusion_style)
+        view.window().setStyle(fusion_style)
     view.setMouseTracking(True)
     view.viewport().setMouseTracking(True)
     if dark_mode:
@@ -212,9 +232,9 @@ def polish_combo_box(combo, dark_mode=False):
     view.viewport().setAutoFillBackground(True)
     view.setStyleSheet(
         f"QAbstractItemView {{ background: {background}; color: {foreground}; "
-        f"border: 1px solid {border}; outline: 0px; padding: 3px; "
+        f"border: 1px solid {border}; outline: 0px; padding: 5px; "
         f"selection-background-color: {selected}; selection-color: {foreground}; }} "
-        "QAbstractItemView::item { min-height: 21px; padding: 2px 8px; "
+        "QAbstractItemView::item { min-height: 30px; padding: 0px 8px; "
         f"border: 0px; border-radius: 5px; margin: 0px 2px; color: {foreground}; }} "
         f"QAbstractItemView::item:hover {{ background-color: {hover}; color: {foreground}; }} "
         f"QAbstractItemView::item:selected {{ background-color: {selected}; color: {foreground}; }}"
@@ -227,6 +247,7 @@ def polish_combo_box(combo, dark_mode=False):
     view.window().installEventFilter(sizer)
     combo._filmflip_popup_delegate = delegate
     combo._filmflip_popup_sizer = sizer
+    combo._filmflip_popup_style = fusion_style
     return combo
 
 
