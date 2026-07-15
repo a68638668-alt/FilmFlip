@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import QDir, QEvent, QObject, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtGui import QColor, QIcon, QPalette
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -77,15 +77,34 @@ class FilmFlipProxyStyle(QProxyStyle):
 
 
 class ComboPopupDelegate(QStyledItemDelegate):
-    """Paint popup hover/selection colors consistently on macOS."""
+    """Paint popup colors consistently instead of relying on the OS palette."""
 
-    def __init__(self, hover_color, selected_color, parent=None):
+    def __init__(
+        self,
+        hover_color,
+        selected_color,
+        foreground_color,
+        background_color,
+        parent=None,
+    ):
         super().__init__(parent)
         self.hover_color = QColor(hover_color)
         self.selected_color = QColor(selected_color)
+        self.foreground_color = QColor(foreground_color)
+        self.background_color = QColor(background_color)
 
     def paint(self, painter, option, index):
         opt = QStyleOptionViewItem(option)
+        for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+            opt.palette.setColor(group, QPalette.Text, self.foreground_color)
+            opt.palette.setColor(group, QPalette.WindowText, self.foreground_color)
+            opt.palette.setColor(group, QPalette.HighlightedText, self.foreground_color)
+            opt.palette.setColor(group, QPalette.Base, self.background_color)
+            opt.palette.setColor(group, QPalette.Window, self.background_color)
+
+        # Windows의 네이티브 팝업 팔레트가 다크 모드 색상을 덮어쓰더라도
+        # 각 행의 기본 배경과 글자가 항상 같은 명암 조합으로 그려지게 한다.
+        painter.fillRect(opt.rect, self.background_color)
         hovered = bool(opt.state & QStyle.State_MouseOver)
         selected = bool(opt.state & QStyle.State_Selected)
         fill = self.hover_color if hovered else self.selected_color if selected else None
@@ -157,6 +176,19 @@ def polish_combo_box(combo, dark_mode=False):
         hover = "#efd6b5"
         selected = "#dfbd91"
         border = "#d4c6b3"
+
+    popup_palette = view.palette()
+    for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+        popup_palette.setColor(group, QPalette.Text, QColor(foreground))
+        popup_palette.setColor(group, QPalette.WindowText, QColor(foreground))
+        popup_palette.setColor(group, QPalette.HighlightedText, QColor(foreground))
+        popup_palette.setColor(group, QPalette.Base, QColor(background))
+        popup_palette.setColor(group, QPalette.Window, QColor(background))
+        popup_palette.setColor(group, QPalette.Highlight, QColor(selected))
+    view.setPalette(popup_palette)
+    view.viewport().setPalette(popup_palette)
+    view.window().setPalette(popup_palette)
+    view.viewport().setAutoFillBackground(True)
     view.setStyleSheet(
         f"QAbstractItemView {{ background: {background}; color: {foreground}; "
         f"border: 1px solid {border}; outline: 0px; padding: 3px; "
@@ -166,7 +198,7 @@ def polish_combo_box(combo, dark_mode=False):
         f"QAbstractItemView::item:hover {{ background-color: {hover}; color: {foreground}; }} "
         f"QAbstractItemView::item:selected {{ background-color: {selected}; color: {foreground}; }}"
     )
-    delegate = ComboPopupDelegate(hover, selected, view)
+    delegate = ComboPopupDelegate(hover, selected, foreground, background, view)
     view.setItemDelegate(delegate)
     if old_delegate is not None:
         old_delegate.deleteLater()
